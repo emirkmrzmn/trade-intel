@@ -68,6 +68,41 @@ export default function Dashboard() {
     });
     document.getElementById('modal-apply')?.addEventListener('click', () => applyPush());
 
+    // Position add buttons
+    appRef.current.querySelectorAll('[data-pos-add]').forEach((el) => {
+      el.addEventListener('click', () => {
+        const product = el.getAttribute('data-pos-add')!;
+        const formEl = document.getElementById(`pos-form-${product}`);
+        if (!formEl) return;
+        if (formEl.innerHTML) { formEl.innerHTML = ''; return; } // toggle off
+        formEl.innerHTML = `
+          <div class="pos-form">
+            <input class="pos-input" id="pos-instrument" placeholder="Instrument (e.g. FCPO May-Jun26)" />
+            <div class="pos-form-row">
+              <select class="pos-input pos-select" id="pos-direction"><option value="Long">Long</option><option value="Short">Short</option></select>
+              <input class="pos-input" id="pos-qty" placeholder="Qty" style="width:60px" />
+              <input class="pos-input" id="pos-entry" placeholder="Entry" style="width:80px" />
+            </div>
+            <div style="display:flex;gap:6px;margin-top:6px">
+              <button class="btn-apply" id="pos-submit" style="font-size:11px;padding:5px 12px">Add Position</button>
+              <button class="btn-cancel" id="pos-cancel" style="font-size:11px;padding:5px 12px">Cancel</button>
+            </div>
+          </div>`;
+        setTimeout(() => document.getElementById('pos-instrument')?.focus(), 50);
+        document.getElementById('pos-submit')?.addEventListener('click', () => submitPosition(product, render));
+        document.getElementById('pos-cancel')?.addEventListener('click', () => { formEl.innerHTML = ''; });
+      });
+    });
+
+    // Position close buttons
+    appRef.current.querySelectorAll('[data-pos-close]').forEach((el) => {
+      el.addEventListener('click', () => {
+        const product = el.getAttribute('data-pos-close')!;
+        const idx = parseInt(el.getAttribute('data-pos-idx')!, 10);
+        removePosition(product, idx, render);
+      });
+    });
+
     function closeModal() {
       stateRef.current.modal = false;
       stateRef.current.parseMsg = null;
@@ -98,6 +133,17 @@ export default function Dashboard() {
     };
     document.addEventListener('push-result', handler);
     return () => document.removeEventListener('push-result', handler);
+  }, [render]);
+
+  // Listen for data refreshes (from position add/remove)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const products = (e as CustomEvent).detail;
+      stateRef.current.data.products = products;
+      render();
+    };
+    document.addEventListener('data-refresh', handler);
+    return () => document.removeEventListener('data-refresh', handler);
   }, [render]);
 
   useEffect(() => {
@@ -154,6 +200,7 @@ interface ProductData {
   ideas: Idea[];
   dates: DateEntry[];
   positions: Position[];
+  risks: string[];
   lastUpdated: string | null;
 }
 interface DashboardData {
@@ -175,7 +222,7 @@ function buildDefault(): DashboardData {
   VALID_PRODUCTS.forEach((p) => {
     data.products[p] = {
       regime: null, regimeType: 'neutral', percentiles: [], outlook: [],
-      ideas: [], dates: [], positions: [], lastUpdated: null,
+      ideas: [], dates: [], positions: [], risks: [], lastUpdated: null,
     };
   });
   return data;
@@ -255,13 +302,19 @@ function renderDatesCard(prod: ProductData) {
     <div class="date-row"><div class="date-d">${esc(d.date || '')}</div><div style="flex:1"><span class="date-label">${esc(d.label || '')}</span><span class="date-note">${esc(d.note || '')}</span></div><div class="date-urgency ${urgClass(d.urgency)}">${esc(d.urgency || '')}</div></div>`).join('');
 }
 
-function renderPositionsCard(prod: ProductData) {
-  if (!prod.positions?.length) return `<div class="empty-state"><div class="em-icon">◈</div><div>No open positions</div><div class="em-cmd">PUSH current positions</div></div>`;
-  const header = `<div class="pos-row"><div class="pos-header">Instrument</div><div class="pos-header" style="text-align:right">Dir</div><div class="pos-header" style="text-align:right">Qty</div><div class="pos-header" style="text-align:right">Entry</div><div class="pos-header" style="text-align:right">P&L</div></div>`;
-  const rows = prod.positions.map((pos) => {
+function renderRisksCard(prod: ProductData) {
+  if (!prod.risks?.length) return `<div class="empty-state"><div class="em-icon">◈</div><div>No risk flags</div><div class="em-cmd">PUSH key risks</div></div>`;
+  return '<ul class="risk-bullets">' + prod.risks.map((r) => `<li><span>${esc(r)}</span></li>`).join('') + '</ul>';
+}
+
+function renderPositionsCard(prod: ProductData, product?: string) {
+  if (!prod.positions?.length) return `<div class="empty-state"><div class="em-icon">◈</div><div>No open positions</div><div class="em-cmd">Use + ADD above</div></div>`;
+  const header = `<div class="pos-row-x"><div class="pos-header">Instrument</div><div class="pos-header" style="text-align:right">Dir</div><div class="pos-header" style="text-align:right">Qty</div><div class="pos-header" style="text-align:right">Entry</div><div class="pos-header" style="text-align:right">P&L</div><div></div></div>`;
+  const rows = prod.positions.map((pos, i) => {
     const pnlClass = pos.pnl && (pos.pnl.startsWith('-') || parseFloat(pos.pnl) < 0) ? 'pos-pnl-neg' : 'pos-pnl-pos';
     const dirClass = (pos.direction || '').toLowerCase() === 'short' ? 'pos-dir-short' : 'pos-dir-long';
-    return `<div class="pos-row"><div class="pos-instr">${esc(pos.instrument || '')}</div><div class="${dirClass}" style="text-align:right">${esc((pos.direction || '').toUpperCase())}</div><div class="pos-num">${esc(pos.qty || '')}</div><div class="pos-num">${esc(pos.entry || '')}</div><div class="${pnlClass}">${esc(pos.pnl || '--')}</div></div>`;
+    const closeBtn = product ? `<button class="pos-close-btn" data-pos-close="${product}" data-pos-idx="${i}">✕</button>` : '';
+    return `<div class="pos-row-x"><div class="pos-instr">${esc(pos.instrument || '')}</div><div class="${dirClass}" style="text-align:right">${esc((pos.direction || '').toUpperCase())}</div><div class="pos-num">${esc(pos.qty || '')}</div><div class="pos-num">${esc(pos.entry || '')}</div><div class="${pnlClass}">${esc(pos.pnl || '--')}</div><div style="text-align:center">${closeBtn}</div></div>`;
   }).join('');
   return header + rows;
 }
@@ -320,9 +373,10 @@ function renderProduct(data: DashboardData, product: string) {
       <div class="card"><div class="card-header"><span class="card-title">FUNDAMENTAL OUTLOOK</span></div><div class="card-body">${renderOutlookCard(prod)}</div></div>
     </div>
     <div class="full-row card"><div class="card-header"><span class="card-title">BEST OPPORTUNITIES</span></div><div class="card-body">${renderIdeasCard(prod)}</div></div>
-    <div class="grid-2">
+    <div class="grid-3">
       <div class="card"><div class="card-header"><span class="card-title">KEY UPCOMING DATES</span></div><div class="card-body">${renderDatesCard(prod)}</div></div>
-      <div class="card"><div class="card-header"><span class="card-title">CURRENT POSITIONS</span></div><div class="card-body">${renderPositionsCard(prod)}</div></div>
+      <div class="card"><div class="card-header"><span class="card-title">KEY RISKS</span></div><div class="card-body">${renderRisksCard(prod)}</div></div>
+      <div class="card"><div class="card-header"><span class="card-title">CURRENT POSITIONS</span><button class="pos-add-btn" data-pos-add="${product}">+ ADD</button></div><div class="card-body"><div id="pos-form-${product}"></div>${renderPositionsCard(prod, product)}</div></div>
     </div>`;
 }
 
@@ -345,7 +399,7 @@ function renderModal(parseMsg: { ok: boolean; msg: string } | null) {
           <div class="modal-hint" style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
             <strong style="color:var(--muted2)">JSON schema</strong><br>
             Required: <code style="color:var(--accent)">product</code><br>
-            Optional: <code style="color:var(--muted2)">regime</code>, <code>regimeType</code> (bull/bear/neutral/transition), <code>percentiles</code> [{label,value}], <code>outlook</code> [strings], <code>ideas</code> [{name,direction,rationale,confidence}], <code>dates</code> [{date,label,note,urgency}], <code>positions</code> [{instrument,direction,qty,entry,pnl}]
+            Optional: <code style="color:var(--muted2)">regime</code>, <code>regimeType</code> (bull/bear/neutral/transition), <code>percentiles</code> [{label,value}], <code>outlook</code> [strings], <code>ideas</code> [{name,direction,rationale,confidence}], <code>dates</code> [{date,label,note,urgency}], <code>positions</code> [{instrument,direction,qty,entry,pnl}], <code>risks</code> [strings]
           </div>
         </div>
       </div>
@@ -377,7 +431,52 @@ async function applyPush() {
   }
 }
 
-// --- Styles (unchanged from original) ---
+// --- Position handlers ---
+async function submitPosition(product: string, renderFn: () => void) {
+  const instrument = (document.getElementById('pos-instrument') as HTMLInputElement)?.value.trim();
+  const direction = (document.getElementById('pos-direction') as HTMLSelectElement)?.value;
+  const qty = (document.getElementById('pos-qty') as HTMLInputElement)?.value.trim() || '1';
+  const entry = (document.getElementById('pos-entry') as HTMLInputElement)?.value.trim();
+  if (!instrument) return;
+
+  try {
+    const res = await fetch('/api/positions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'add', product, position: { instrument, direction, qty, entry, pnl: '--' } }),
+    });
+    const json = await res.json();
+    if (json.ok) {
+      // Refresh from server
+      const dataRes = await fetch('/api/data');
+      const dataJson = await dataRes.json();
+      if (dataJson.products) {
+        (window as unknown as { __dashRender: { stateRef: { current: { data: DashboardData } } }; render: () => void }).__dashRender;
+        document.dispatchEvent(new CustomEvent('data-refresh', { detail: dataJson.products }));
+      }
+    }
+  } catch { /* ignore */ }
+}
+
+async function removePosition(product: string, index: number, renderFn: () => void) {
+  try {
+    const res = await fetch('/api/positions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'remove', product, index }),
+    });
+    const json = await res.json();
+    if (json.ok) {
+      const dataRes = await fetch('/api/data');
+      const dataJson = await dataRes.json();
+      if (dataJson.products) {
+        document.dispatchEvent(new CustomEvent('data-refresh', { detail: dataJson.products }));
+      }
+    }
+  } catch { /* ignore */ }
+}
+
+// --- Styles ---
 const STYLES = `
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -479,4 +578,18 @@ body { background: var(--bg); color: var(--text); font-family: var(--sans); font
 .pos-product { font-family: var(--mono); font-size: 11px; color: var(--accent); }
 .last-updated { font-family: var(--mono); font-size: 10px; color: var(--muted); }
 .pct-label-mini { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+.risk-bullets { list-style: none; padding: 0; }
+.risk-bullets li { padding: 3px 0; color: var(--muted2); font-size: 12px; display: flex; gap: 8px; }
+.risk-bullets li::before { content: '›'; color: var(--red); flex-shrink: 0; }
+.pos-add-btn { background: none; border: 1px solid var(--border2); color: var(--muted); padding: 2px 8px; border-radius: 3px; font-family: var(--mono); font-size: 10px; cursor: pointer; letter-spacing: 0.05em; }
+.pos-add-btn:hover { color: var(--accent); border-color: var(--accent); }
+.pos-close-btn { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 12px; padding: 0 4px; line-height: 1; }
+.pos-close-btn:hover { color: var(--red); }
+.pos-row-x { display: grid; grid-template-columns: 1fr 60px 60px 80px 60px 28px; gap: 6px; padding: 7px 0; border-bottom: 1px solid var(--border); align-items: center; }
+.pos-row-x:last-child { border-bottom: none; }
+.pos-form { padding: 8px 0 12px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+.pos-form-row { display: flex; gap: 6px; margin-top: 6px; }
+.pos-input { background: var(--bg3); border: 1px solid var(--border2); border-radius: 3px; color: var(--text); font-family: var(--mono); font-size: 11px; padding: 5px 8px; width: 100%; }
+.pos-input:focus { outline: none; border-color: var(--accent); }
+.pos-select { width: 80px; }
 `;

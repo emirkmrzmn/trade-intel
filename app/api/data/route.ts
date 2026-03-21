@@ -12,6 +12,7 @@ function defaultProduct() {
     ideas: [],
     dates: [],
     positions: [],
+    risks: [],
     lastUpdated: null,
   };
 }

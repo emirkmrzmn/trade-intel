@@ -2,7 +2,7 @@ import { redis } from '@/app/lib/redis';
 import { NextRequest, NextResponse } from 'next/server';
 
 const VALID_PRODUCTS = ['FCPO', 'NG', 'ZM', 'ZL', 'HE', 'GF', 'LE', 'ZC', 'ZS', 'ZW'];
-const MERGE_FIELDS = ['regime', 'regimeType', 'percentiles', 'outlook', 'ideas', 'dates', 'positions'] as const;
+const MERGE_FIELDS = ['regime', 'regimeType', 'percentiles', 'outlook', 'ideas', 'dates', 'positions', 'risks'] as const;
 
 function defaultProduct() {
   return {
@@ -13,6 +13,7 @@ function defaultProduct() {
     ideas: [],
     dates: [],
     positions: [],
+    risks: [],
     lastUpdated: null,
   };
 }
