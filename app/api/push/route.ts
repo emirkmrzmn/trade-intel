@@ -1,0 +1,59 @@
+import { kv } from '@vercel/kv';
+import { NextRequest, NextResponse } from 'next/server';
+
+const VALID_PRODUCTS = ['FCPO', 'NG', 'ZM', 'ZL', 'HE', 'GF', 'LE', 'ZC', 'ZS', 'ZW'];
+const MERGE_FIELDS = ['regime', 'regimeType', 'percentiles', 'outlook', 'ideas', 'dates', 'positions'] as const;
+
+function defaultProduct() {
+  return {
+    regime: null,
+    regimeType: 'neutral',
+    percentiles: [],
+    outlook: [],
+    ideas: [],
+    dates: [],
+    positions: [],
+    lastUpdated: null,
+  };
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const payload = await req.json();
+
+    if (!payload.product) {
+      return NextResponse.json({ ok: false, error: 'Missing "product" field.' }, { status: 400 });
+    }
+
+    const product = payload.product.toUpperCase();
+    if (!VALID_PRODUCTS.includes(product)) {
+      return NextResponse.json(
+        { ok: false, error: `Unknown product: "${product}". Valid: ${VALID_PRODUCTS.join(', ')}` },
+        { status: 400 }
+      );
+    }
+
+    const key = `product:${product}`;
+    const existing = (await kv.get<Record<string, unknown>>(key)) || defaultProduct();
+
+    for (const field of MERGE_FIELDS) {
+      if (payload[field] !== undefined) {
+        (existing as Record<string, unknown>)[field] = payload[field];
+      }
+    }
+
+    const now = new Date();
+    (existing as Record<string, unknown>).lastUpdated = now.toLocaleDateString('en-GB', {
+      day: '2-digit',
+      month: 'short',
+      year: '2-digit',
+    });
+
+    await kv.set(key, existing);
+
+    return NextResponse.json({ ok: true, product, updatedAt: now.toISOString() });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'Unknown error';
+    return NextResponse.json({ ok: false, error: msg }, { status: 400 });
+  }
+}
