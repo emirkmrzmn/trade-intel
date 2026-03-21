@@ -1,4 +1,4 @@
-import { kv } from '@vercel/kv';
+import { redis } from '@/app/lib/redis';
 import { NextRequest, NextResponse } from 'next/server';
 
 const VALID_PRODUCTS = ['FCPO', 'NG', 'ZM', 'ZL', 'HE', 'GF', 'LE', 'ZC', 'ZS', 'ZW'];
@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
     }
 
     const key = `product:${product}`;
-    const existing = (await kv.get<Record<string, unknown>>(key)) || defaultProduct();
+    const existing = (await redis.get<Record<string, unknown>>(key)) || defaultProduct();
 
     for (const field of MERGE_FIELDS) {
       if (payload[field] !== undefined) {
@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
       year: '2-digit',
     });
 
-    await kv.set(key, existing);
+    await redis.set(key, existing);
 
     return NextResponse.json({ ok: true, product, updatedAt: now.toISOString() });
   } catch (e: unknown) {
