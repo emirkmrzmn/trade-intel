@@ -1,7 +1,7 @@
 import { redis } from '@/app/lib/redis';
 import { NextResponse } from 'next/server';
 
-const PRODUCTS = ['FCPO', 'NG', 'ZM', 'ZL', 'HE', 'GF', 'LE', 'ZC', 'ZS', 'ZW'];
+const PRODUCTS = ['FCPO', 'ZC', 'ZS', 'ZL', 'ZM', 'ZW', 'NG', 'HO', 'RB', 'KC', 'SB', 'CC', 'CT', 'HE', 'GF', 'LE'];
 
 function defaultProduct() {
   return {

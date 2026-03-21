@@ -210,10 +210,11 @@ interface DashboardData {
 }
 
 // --- Constants ---
-const PRODUCTS = ['OVERVIEW', 'FCPO', 'NG', 'ZM', 'ZL', 'HE', 'GF', 'LE', 'ZC', 'ZS', 'ZW'];
+const PRODUCTS = ['OVERVIEW', 'FCPO', 'ZC', 'ZS', 'ZL', 'ZM', 'ZW', 'NG', 'HO', 'RB', 'KC', 'SB', 'CC', 'CT', 'HE', 'GF', 'LE'];
 const PRODUCT_LABELS: Record<string, string> = {
-  OVERVIEW: 'OVERVIEW', FCPO: 'FCPO', NG: 'NAT GAS', ZM: 'SOY MEAL', ZL: 'SOY OIL',
-  HE: 'LEAN HOG', GF: 'FEEDER CTL', LE: 'LIVE CTL', ZC: 'CORN', ZS: 'SOYBEANS', ZW: 'WHEAT',
+  OVERVIEW: 'OVERVIEW', FCPO: 'FCPO', ZC: 'CORN', ZS: 'SOYBEANS', ZL: 'SOY OIL', ZM: 'SOY MEAL',
+  ZW: 'WHEAT', NG: 'NAT GAS', HO: 'HEATING OIL', RB: 'RBOB GAS', KC: 'COFFEE', SB: 'SUGAR',
+  CC: 'COCOA', CT: 'COTTON', HE: 'LEAN HOG', GF: 'FEEDER CTL', LE: 'LIVE CTL',
 };
 const VALID_PRODUCTS = PRODUCTS.filter((p) => p !== 'OVERVIEW');
 
