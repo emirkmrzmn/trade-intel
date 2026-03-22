@@ -1,8 +1,24 @@
 'use client';
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
+
+function getStoredPassword() {
+  try { return sessionStorage.getItem('dash_pw') || ''; } catch { return ''; }
+}
+
+function authHeaders(): Record<string, string> {
+  const pw = getStoredPassword();
+  return pw ? { 'Authorization': `Bearer ${pw}` } : {};
+}
+
+function authFetch(url: string, opts?: RequestInit): Promise<Response> {
+  const headers = { ...authHeaders(), ...(opts?.headers || {}) };
+  return fetch(url, { ...opts, headers });
+}
 
 export default function Dashboard() {
+  const [authed, setAuthed] = useState<boolean | null>(null); // null = checking
+  const [loginError, setLoginError] = useState('');
   const appRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef<{
     tab: string;
@@ -15,6 +31,38 @@ export default function Dashboard() {
     parseMsg: null,
     data: buildDefault(),
   });
+
+  // Check auth on mount
+  useEffect(() => {
+    const pw = getStoredPassword();
+    if (!pw) { setAuthed(false); return; }
+    authFetch('/api/data').then((r) => {
+      if (r.ok) setAuthed(true);
+      else { sessionStorage.removeItem('dash_pw'); setAuthed(false); }
+    }).catch(() => setAuthed(false));
+  }, []);
+
+  const handleLogin = useCallback(async () => {
+    const input = document.getElementById('login-pw') as HTMLInputElement | null;
+    const pw = input?.value.trim();
+    if (!pw) return;
+    try {
+      const res = await fetch('/api/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pw }),
+      });
+      if (res.ok) {
+        sessionStorage.setItem('dash_pw', pw);
+        setLoginError('');
+        setAuthed(true);
+      } else {
+        setLoginError('Wrong password');
+      }
+    } catch {
+      setLoginError('Connection error');
+    }
+  }, []);
 
   const render = useCallback(() => {
     if (!appRef.current) return;
@@ -119,7 +167,7 @@ export default function Dashboard() {
       if (detail.ok) {
         // Refresh data from server then switch tab
         setTimeout(() => {
-          fetch('/api/data')
+          authFetch('/api/data')
             .then((r) => r.json())
             .then((json) => {
               if (json.products) stateRef.current.data.products = json.products;
@@ -148,7 +196,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     // Load data from API
-    fetch('/api/data')
+    authFetch('/api/data')
       .then((r) => r.json())
       .then((json) => {
         if (json.products) {
@@ -162,7 +210,7 @@ export default function Dashboard() {
 
     // Auto-refresh every 60s
     const pollInterval = setInterval(() => {
-      fetch('/api/data')
+      authFetch('/api/data')
         .then((r) => r.json())
         .then((json) => {
           if (json.products) {
@@ -178,6 +226,27 @@ export default function Dashboard() {
       clearInterval(pollInterval);
     };
   }, [render]);
+
+  if (authed === null) {
+    return <><style dangerouslySetInnerHTML={{ __html: STYLES }} /><div className="login-wrap"><div className="login-box"><div className="login-logo">▸ TRADE INTEL</div><div style={{color:'var(--muted2)',fontSize:12}}>Verifying...</div></div></div></>;
+  }
+
+  if (!authed) {
+    return (
+      <>
+        <style dangerouslySetInnerHTML={{ __html: STYLES }} />
+        <div className="login-wrap">
+          <div className="login-box">
+            <div className="login-logo">▸ TRADE INTEL</div>
+            <input id="login-pw" type="password" className="login-input" placeholder="Password" autoFocus
+              onKeyDown={(e) => { if (e.key === 'Enter') handleLogin(); }} />
+            <button className="login-btn" onClick={handleLogin}>Enter</button>
+            {loginError && <div className="login-error">{loginError}</div>}
+          </div>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
@@ -425,7 +494,7 @@ async function applyPush() {
 
   try {
     JSON.parse(val); // validate JSON locally first
-    const res = await fetch('/api/push', {
+    const res = await authFetch('/api/push', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: val,
@@ -451,7 +520,7 @@ async function submitPosition(product: string, renderFn: () => void) {
   if (!instrument) return;
 
   try {
-    const res = await fetch('/api/positions', {
+    const res = await authFetch('/api/positions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'add', product, position: { instrument, direction, qty, entry, pnl: '--' } }),
@@ -459,7 +528,7 @@ async function submitPosition(product: string, renderFn: () => void) {
     const json = await res.json();
     if (json.ok) {
       // Refresh from server
-      const dataRes = await fetch('/api/data');
+      const dataRes = await authFetch('/api/data');
       const dataJson = await dataRes.json();
       if (dataJson.products) {
         (window as unknown as { __dashRender: { stateRef: { current: { data: DashboardData } } }; render: () => void }).__dashRender;
@@ -471,14 +540,14 @@ async function submitPosition(product: string, renderFn: () => void) {
 
 async function removePosition(product: string, index: number, renderFn: () => void) {
   try {
-    const res = await fetch('/api/positions', {
+    const res = await authFetch('/api/positions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'remove', product, index }),
     });
     const json = await res.json();
     if (json.ok) {
-      const dataRes = await fetch('/api/data');
+      const dataRes = await authFetch('/api/data');
       const dataJson = await dataRes.json();
       if (dataJson.products) {
         document.dispatchEvent(new CustomEvent('data-refresh', { detail: dataJson.products }));
@@ -607,4 +676,12 @@ body { background: var(--bg); color: var(--text); font-family: var(--sans); font
 .pos-input { background: var(--bg3); border: 1px solid var(--border2); border-radius: 3px; color: var(--text); font-family: var(--mono); font-size: 11px; padding: 5px 8px; width: 100%; }
 .pos-input:focus { outline: none; border-color: var(--accent); }
 .pos-select { width: 80px; }
+.login-wrap { display: flex; align-items: center; justify-content: center; min-height: 100vh; background: var(--bg1); }
+.login-box { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 32px; width: 320px; text-align: center; }
+.login-logo { font-family: var(--mono); font-size: 16px; font-weight: 600; color: var(--accent); margin-bottom: 24px; letter-spacing: 1px; }
+.login-input { width: 100%; background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; padding: 10px 12px; color: var(--text); font-family: var(--mono); font-size: 13px; margin-bottom: 12px; box-sizing: border-box; }
+.login-input:focus { outline: none; border-color: var(--accent); }
+.login-btn { width: 100%; background: var(--accent); color: var(--bg1); border: none; border-radius: 4px; padding: 10px; font-family: var(--mono); font-size: 12px; font-weight: 600; cursor: pointer; letter-spacing: 0.5px; }
+.login-btn:hover { opacity: 0.9; }
+.login-error { color: var(--red); font-size: 11px; margin-top: 10px; font-family: var(--mono); }
 `;

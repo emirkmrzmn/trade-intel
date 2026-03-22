@@ -1,4 +1,5 @@
 import { redis } from '@/app/lib/redis';
+import { checkAuth } from '@/app/lib/auth';
 import { NextRequest, NextResponse } from 'next/server';
 
 const VALID_PRODUCTS = ['FCPO', 'ZC', 'ZS', 'ZL', 'ZM', 'ZW', 'NG', 'HO', 'RB', 'KC', 'SB', 'CC', 'CT', 'HE', 'GF', 'LE'];
@@ -19,6 +20,8 @@ function defaultProduct() {
 }
 
 export async function POST(req: NextRequest) {
+  const denied = checkAuth(req);
+  if (denied) return denied;
   try {
     const payload = await req.json();
 
