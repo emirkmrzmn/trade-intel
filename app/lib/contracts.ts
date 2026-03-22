@@ -89,7 +89,6 @@ export function generateActiveContracts(product: string, referenceDate: Date): C
   const startFromMonth = day >= 15 ? rawMonth + 1 : rawMonth;
   const currentYear = referenceDate.getFullYear();
   const contracts: ContractInfo[] = [];
-  const targetCount = 14; // enough for ~12 calendar spreads
 
   let year = startFromMonth > 12 ? currentYear + 1 : currentYear;
   const effectiveMonth = startFromMonth > 12 ? 1 : startFromMonth;
@@ -108,14 +107,21 @@ export function generateActiveContracts(product: string, referenceDate: Date): C
     }
   }
 
-  // Walk forward collecting contracts
+  // Calculate the 1-year cutoff: ~13 months from reference date
+  const cutoffDate = new Date(referenceDate);
+  cutoffDate.setMonth(cutoffDate.getMonth() + 13);
+  const cutoffYear = cutoffDate.getFullYear();
+  const cutoffMonth = cutoffDate.getMonth() + 1; // 1-12
+
+  // Walk forward collecting contracts within the 1-year window
   let idx = startIdx;
   let y = year;
-  while (contracts.length < targetCount) {
-    if (y > currentYear + 2) break; // safety: don't go more than 2 years out
-
+  while (true) {
     const code = months[idx];
     const monthNum = MONTH_CODES[code];
+    // Stop if this contract is beyond the 1-year cutoff
+    if (y > cutoffYear || (y === cutoffYear && monthNum > cutoffMonth)) break;
+
     const monthName = MONTH_NAMES[code];
     const yy = String(y).slice(-2);
     const ticker = `${product}${code}${yy}${exchange}`;
