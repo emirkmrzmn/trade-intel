@@ -3,7 +3,7 @@ import { checkAuth } from '@/app/lib/auth';
 import { NextRequest, NextResponse } from 'next/server';
 
 const VALID_PRODUCTS = ['FCPO', 'ZC', 'ZS', 'ZL', 'ZM', 'ZW', 'NG', 'HO', 'RB', 'KC', 'SB', 'CC', 'CT', 'HE', 'GF', 'LE'];
-const MERGE_FIELDS = ['regime', 'regimeType', 'percentiles', 'outlook', 'ideas', 'dates', 'positions', 'risks'] as const;
+const MERGE_FIELDS = ['regime', 'regimeType', 'percentiles', 'outlook', 'ideas', 'dates', 'positions', 'risks', 'spreadPercentiles'] as const;
 
 function defaultProduct() {
   return {
@@ -15,6 +15,7 @@ function defaultProduct() {
     dates: [],
     positions: [],
     risks: [],
+    spreadPercentiles: null,
     lastUpdated: null,
   };
 }

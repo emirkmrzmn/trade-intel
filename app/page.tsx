@@ -307,6 +307,8 @@ interface Percentile { label: string; value: number }
 interface Idea { tier: string; contract: string; direction: string; entry_date: string; entry_price: string; exit_date: string; exit_price: string; rationale: string }
 interface DateEntry { date: string; label: string; note: string; urgency: string }
 interface Position { instrument: string; direction: string; qty: string; entry: string; pnl: string }
+interface SpreadPctEntry { min: number; p5: number; p10: number; p25: number; p50: number; p75: number; p90: number; p95: number; max: number }
+interface SpreadPercentiles { calendars: Record<string, SpreadPctEntry>; butterflies: Record<string, SpreadPctEntry> }
 interface ProductData {
   regime: string | null;
   regimeType: string;
@@ -316,6 +318,7 @@ interface ProductData {
   dates: DateEntry[];
   positions: Position[];
   risks: string[];
+  spreadPercentiles: SpreadPercentiles | null;
   lastUpdated: string | null;
 }
 interface DashboardData {
@@ -346,7 +349,7 @@ function buildDefault(): DashboardData {
   VALID_PRODUCTS.forEach((p) => {
     data.products[p] = {
       regime: null, regimeType: 'neutral', percentiles: [], outlook: [],
-      ideas: [], dates: [], positions: [], risks: [], lastUpdated: null,
+      ideas: [], dates: [], positions: [], risks: [], spreadPercentiles: null, lastUpdated: null,
     };
   });
   return data;
@@ -453,7 +456,7 @@ function renderPositionsCard(prod: ProductData, product?: string) {
   return header + rows;
 }
 
-function renderSpreadsCard(sp: SpreadsProduct | null, loading: boolean) {
+function renderSpreadsCard(sp: SpreadsProduct | null, loading: boolean, spPct: SpreadPercentiles | null) {
   if (!sp) return `<div class="empty-state"><div class="em-icon">◈</div><div>${loading ? 'Loading spread data...' : 'No spread data yet'}</div><div class="em-cmd">Click REFRESH to fetch prices</div></div>`;
 
   const formatVal = (v: number | null) => {
@@ -463,21 +466,74 @@ function renderSpreadsCard(sp: SpreadsProduct | null, loading: boolean) {
     return `<span class="${cls}">${sign}${v.toFixed(2)}</span>`;
   };
 
-  const renderGrid = (items: SpreadEntry[]) => {
-    if (!items.length) return '<div class="sp-nil" style="padding:4px 0">No data</div>';
-    return '<div class="sp-grid">' + items.map((s) =>
-      `<div class="sp-row"><span class="sp-name">${esc(s.name)}</span>${formatVal(s.value)}</div>`
-    ).join('') + '</div>';
+  // Normalize spread name for percentile lookup: strip year digits to get generic name
+  // e.g. "May-Jul26" → "May-Jul", "Dec26-Mar27" → "Dec-Mar", "May/Jul/Sep26" → "May/Jul/Sep"
+  const normalizeName = (name: string) => name.replace(/\d{2}/g, '').replace(/\s+/g, '');
+
+  const renderRangeBar = (pct: SpreadPctEntry, liveVal: number) => {
+    const range = pct.p95 - pct.p5;
+    if (range <= 0) return '';
+    const clamp = (v: number) => Math.max(0, Math.min(100, ((v - pct.p5) / range) * 100));
+    const p25Pos = clamp(pct.p25);
+    const p75Pos = clamp(pct.p75);
+    const p50Pos = clamp(pct.p50);
+    const livePos = clamp(liveVal);
+    const livePct = ((liveVal - pct.p5) / range) * 100;
+    let zoneLabel = '';
+    let zoneCls = '';
+    if (livePct <= 10) { zoneLabel = 'CHEAP'; zoneCls = 'rb-zone-cheap'; }
+    else if (livePct >= 90) { zoneLabel = 'RICH'; zoneCls = 'rb-zone-rich'; }
+
+    // Build tooltip data as data attrs
+    const ttData = `data-tt-min="${pct.min.toFixed(2)}" data-tt-p5="${pct.p5.toFixed(2)}" data-tt-p10="${pct.p10.toFixed(2)}" data-tt-p25="${pct.p25.toFixed(2)}" data-tt-p50="${pct.p50.toFixed(2)}" data-tt-p75="${pct.p75.toFixed(2)}" data-tt-p90="${pct.p90.toFixed(2)}" data-tt-p95="${pct.p95.toFixed(2)}" data-tt-max="${pct.max.toFixed(2)}" data-tt-live="${liveVal.toFixed(2)}"`;
+
+    return `<div class="rb-wrap" ${ttData}>
+      <span class="rb-end">${pct.p5.toFixed(1)}</span>
+      <div class="rb-track">
+        <div class="rb-inner" style="left:${p25Pos}%;width:${p75Pos - p25Pos}%"></div>
+        <div class="rb-tick" style="left:${clamp(pct.p10)}%"></div>
+        <div class="rb-tick" style="left:${p25Pos}%"></div>
+        <div class="rb-tick rb-tick-mid" style="left:${p50Pos}%"></div>
+        <div class="rb-tick" style="left:${p75Pos}%"></div>
+        <div class="rb-tick" style="left:${clamp(pct.p90)}%"></div>
+        <div class="rb-dot" style="left:${livePos}%"><div class="rb-dot-glow"></div><div class="rb-dot-core"></div></div>
+      </div>
+      <span class="rb-end">${pct.p95.toFixed(1)}</span>
+      ${zoneLabel ? `<span class="rb-zone ${zoneCls}">${zoneLabel}</span>` : ''}
+    </div>`;
   };
 
+  const renderRow = (s: SpreadEntry, pctMap: Record<string, SpreadPctEntry> | undefined) => {
+    const pct = pctMap?.[normalizeName(s.name)];
+    const hasBar = pct && s.value !== null;
+    return `<div class="rb-row">
+      <span class="rb-name">${esc(s.name)}</span>
+      <span class="rb-price">${formatVal(s.value)}</span>
+      ${hasBar ? renderRangeBar(pct!, s.value!) : '<div class="rb-wrap"><div class="rb-track rb-track-empty"></div></div>'}
+    </div>`;
+  };
+
+  const calRows = sp.calendars.map((s) => renderRow(s, spPct?.calendars)).join('');
+  const flyRows = sp.butterflies.map((s) => renderRow(s, spPct?.butterflies)).join('');
+
   return `
-    <div class="sp-section">
-      <div class="section-label">Calendar Spreads</div>
-      ${renderGrid(sp.calendars)}
+    <div class="rb-cols">
+      <div class="rb-col">
+        <div class="section-label">Calendar Spreads</div>
+        <div class="rb-hdr"><span class="rb-hdr-name">Spread</span><span class="rb-hdr-price">Price</span><span class="rb-hdr-bar">P5</span><span class="rb-hdr-end">P95</span></div>
+        ${calRows}
+      </div>
+      <div class="rb-col">
+        <div class="section-label">Butterfly Spreads</div>
+        <div class="rb-hdr"><span class="rb-hdr-name">Spread</span><span class="rb-hdr-price">Price</span><span class="rb-hdr-bar">P5</span><span class="rb-hdr-end">P95</span></div>
+        ${flyRows}
+      </div>
     </div>
-    <div class="sp-section">
-      <div class="section-label">Butterfly Spreads</div>
-      ${renderGrid(sp.butterflies)}
+    <div class="rb-legend">
+      <div class="rb-leg-item"><div class="rb-leg-outer"></div><span>P5–P95</span></div>
+      <div class="rb-leg-item"><div class="rb-leg-inner"></div><span>P25–P75</span></div>
+      <div class="rb-leg-item"><div class="rb-leg-dot"></div><span>Live</span></div>
+      <div class="rb-leg-item"><div class="rb-leg-tick"></div><span>P50</span></div>
     </div>`;
 }
 
@@ -541,7 +597,7 @@ function renderProduct(data: DashboardData, product: string, spreads: Record<str
 
   const spreadsCard = isFCPO
     ? `<div class="full-row card"><div class="card-header"><span class="card-title">LIVE SPREADS</span><span class="last-updated">FCPO — coming soon</span></div><div class="card-body"><div class="empty-state"><div class="em-icon">◈</div><div>FCPO prices not yet available via Yahoo Finance</div></div></div></div>`
-    : `<div class="full-row card"><div class="card-header"><span class="card-title">LIVE SPREADS</span><div style="display:flex;align-items:center;gap:8px"><span class="last-updated">${spTime}${staleTag}${loadingTag}</span><button class="pos-add-btn" data-spreads-refresh="${product}">↻ REFRESH</button></div></div><div class="card-body">${renderSpreadsCard(sp, spreadsLoading)}</div></div>`;
+    : `<div class="full-row card"><div class="card-header"><span class="card-title">LIVE SPREADS</span><div style="display:flex;align-items:center;gap:8px"><span class="last-updated">${spTime}${staleTag}${loadingTag}</span><button class="pos-add-btn" data-spreads-refresh="${product}">↻ REFRESH</button></div></div><div class="card-body">${renderSpreadsCard(sp, spreadsLoading, prod.spreadPercentiles)}</div></div>`;
 
   return `
     <div class="grid-2">
@@ -576,7 +632,7 @@ function renderModal(parseMsg: { ok: boolean; msg: string } | null) {
           <div class="modal-hint" style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
             <strong style="color:var(--muted2)">JSON schema</strong><br>
             Required: <code style="color:var(--accent)">product</code><br>
-            Optional: <code style="color:var(--muted2)">regime</code>, <code>regimeType</code> (bull/bear/neutral/transition), <code>percentiles</code> [{label,value}], <code>outlook</code> [strings], <code>ideas</code> [{tier,contract,direction,entry_date,entry_price,exit_date,exit_price,rationale}], <code>dates</code> [{date,label,note,urgency}], <code>positions</code> [{instrument,direction,qty,entry,pnl}], <code>risks</code> [strings]
+            Optional: <code style="color:var(--muted2)">regime</code>, <code>regimeType</code> (bull/bear/neutral/transition), <code>percentiles</code> [{label,value}], <code>outlook</code> [strings], <code>ideas</code> [{tier,contract,direction,entry_date,entry_price,exit_date,exit_price,rationale}], <code>dates</code> [{date,label,note,urgency}], <code>positions</code> [{instrument,direction,qty,entry,pnl}], <code>risks</code> [strings], <code>spreadPercentiles</code> {calendars:{SpreadName:{min,p5,p10,p25,p50,p75,p90,p95,max}},butterflies:{...}}
           </div>
         </div>
       </div>
@@ -781,17 +837,41 @@ body { background: var(--bg); color: var(--text); font-family: var(--sans); font
 .login-btn { width: 100%; background: var(--accent); color: var(--bg1); border: none; border-radius: 4px; padding: 10px; font-family: var(--mono); font-size: 12px; font-weight: 600; cursor: pointer; letter-spacing: 0.5px; }
 .login-btn:hover { opacity: 0.9; }
 .login-error { color: var(--red); font-size: 11px; margin-top: 10px; font-family: var(--mono); }
-.sp-section { margin-bottom: 14px; }
-.sp-section:last-child { margin-bottom: 0; }
-.sp-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0; }
-.sp-row { display: flex; justify-content: space-between; padding: 5px 10px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 11px; }
-.sp-row:last-child { border-bottom: none; }
-.sp-name { color: var(--muted2); }
 .sp-pos { color: var(--green); font-weight: 500; }
 .sp-neg { color: var(--red); font-weight: 500; }
 .sp-zero { color: var(--muted); }
 .sp-nil { color: var(--muted); }
 .sp-stale { color: var(--amber); font-family: var(--mono); font-size: 10px; }
-@media (max-width: 900px) { .sp-grid { grid-template-columns: 1fr 1fr; } }
-@media (max-width: 600px) { .sp-grid { grid-template-columns: 1fr; } }
+.rb-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+@media (max-width: 900px) { .rb-cols { grid-template-columns: 1fr; } }
+.rb-col { min-width: 0; }
+.rb-hdr { display: flex; align-items: center; gap: 0; padding: 0 0 4px; margin-bottom: 2px; }
+.rb-hdr-name { width: 110px; flex-shrink: 0; font-family: var(--mono); font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.rb-hdr-price { width: 62px; flex-shrink: 0; font-family: var(--mono); font-size: 9px; color: var(--muted); text-transform: uppercase; text-align: right; padding-right: 8px; }
+.rb-hdr-bar { flex: 1; font-family: var(--mono); font-size: 9px; color: var(--muted); }
+.rb-hdr-end { width: 36px; flex-shrink: 0; font-family: var(--mono); font-size: 9px; color: var(--muted); text-align: right; }
+.rb-row { display: flex; align-items: center; padding: 6px 0; border-bottom: 1px solid rgba(42,47,58,0.5); }
+.rb-row:last-child { border-bottom: none; }
+.rb-name { width: 110px; flex-shrink: 0; font-family: var(--mono); font-size: 11px; color: var(--muted2); }
+.rb-price { width: 62px; flex-shrink: 0; font-family: var(--mono); font-size: 11px; text-align: right; padding-right: 8px; }
+.rb-wrap { display: flex; align-items: center; flex: 1; gap: 4px; position: relative; cursor: default; min-width: 0; }
+.rb-end { font-family: var(--mono); font-size: 9px; color: var(--muted); width: 32px; flex-shrink: 0; }
+.rb-end:last-of-type { text-align: right; }
+.rb-track { position: relative; flex: 1; height: 16px; background: rgba(30,35,50,0.9); border-radius: 3px; min-width: 60px; }
+.rb-track-empty { background: rgba(30,35,50,0.4); }
+.rb-inner { position: absolute; top: 0; height: 100%; background: rgba(45,52,72,0.9); border-radius: 2px; }
+.rb-tick { position: absolute; top: 4px; width: 1px; height: 8px; background: rgba(70,78,100,0.7); transform: translateX(-50%); }
+.rb-tick-mid { top: 2px; height: 12px; background: rgba(100,108,130,0.8); }
+.rb-dot { position: absolute; top: 50%; transform: translate(-50%, -50%); z-index: 2; }
+.rb-dot-glow { width: 18px; height: 18px; border-radius: 50%; background: radial-gradient(circle, rgba(0,210,210,0.25) 0%, transparent 70%); position: absolute; top: -5px; left: -5px; }
+.rb-dot-core { width: 8px; height: 8px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #b0ffff, #00d2d2); box-shadow: 0 0 4px rgba(0,210,210,0.5); position: relative; z-index: 1; }
+.rb-zone { font-family: var(--mono); font-size: 9px; font-weight: 500; letter-spacing: 0.05em; margin-left: 4px; flex-shrink: 0; }
+.rb-zone-cheap { color: var(--green); }
+.rb-zone-rich { color: #e88a3a; }
+.rb-legend { display: flex; gap: 18px; padding: 10px 0 0; border-top: 1px solid var(--border); margin-top: 12px; }
+.rb-leg-item { display: flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 9px; color: var(--muted); }
+.rb-leg-outer { width: 18px; height: 8px; background: rgba(30,35,50,0.9); border-radius: 2px; }
+.rb-leg-inner { width: 18px; height: 8px; background: rgba(45,52,72,0.9); border-radius: 2px; }
+.rb-leg-dot { width: 8px; height: 8px; border-radius: 50%; background: #00d2d2; }
+.rb-leg-tick { width: 1px; height: 10px; background: rgba(100,108,130,0.8); margin: 0 4px; }
 `;

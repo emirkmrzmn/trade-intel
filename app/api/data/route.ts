@@ -14,6 +14,7 @@ function defaultProduct() {
     dates: [],
     positions: [],
     risks: [],
+    spreadPercentiles: null,
     lastUpdated: null,
   };
 }
