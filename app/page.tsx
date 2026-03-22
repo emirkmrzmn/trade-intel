@@ -25,11 +25,15 @@ export default function Dashboard() {
     modal: boolean;
     parseMsg: { ok: boolean; msg: string; product?: string } | null;
     data: DashboardData;
+    spreads: Record<string, SpreadsProduct> | null;
+    spreadsLoading: boolean;
   }>({
     tab: 'OVERVIEW',
     modal: false,
     parseMsg: null,
     data: buildDefault(),
+    spreads: null,
+    spreadsLoading: false,
   });
 
   // Check auth on mount
@@ -71,7 +75,8 @@ export default function Dashboard() {
       (p) =>
         `<div class="tab${tab === p ? ' active' : ''}" data-tab="${p}">${PRODUCT_LABELS[p] || p}</div>`
     ).join('');
-    const content = tab === 'OVERVIEW' ? renderOverview(data) : renderProduct(data, tab);
+    const { spreads, spreadsLoading } = stateRef.current;
+    const content = tab === 'OVERVIEW' ? renderOverview(data) : renderProduct(data, tab, spreads, spreadsLoading);
     const modalHTML = modal ? renderModal(parseMsg) : '';
 
     appRef.current.innerHTML = `
@@ -151,6 +156,22 @@ export default function Dashboard() {
       });
     });
 
+    // Spreads refresh buttons
+    appRef.current.querySelectorAll('[data-spreads-refresh]').forEach((el) => {
+      el.addEventListener('click', async () => {
+        stateRef.current.spreadsLoading = true;
+        render();
+        try {
+          await authFetch('/api/spreads/refresh', { method: 'POST' });
+          const res = await authFetch('/api/spreads');
+          const json = await res.json();
+          if (json.spreads) stateRef.current.spreads = json.spreads;
+        } catch { /* ignore */ }
+        stateRef.current.spreadsLoading = false;
+        render();
+      });
+    });
+
     function closeModal() {
       stateRef.current.modal = false;
       stateRef.current.parseMsg = null;
@@ -221,9 +242,34 @@ export default function Dashboard() {
         .catch(() => {});
     }, 60000);
 
+    // Load spreads data
+    authFetch('/api/spreads')
+      .then((r) => r.json())
+      .then((json) => {
+        if (json.spreads) {
+          stateRef.current.spreads = json.spreads;
+          render();
+        }
+      })
+      .catch(() => {});
+
+    // Refresh spreads every 30 min
+    const spreadsPoll = setInterval(() => {
+      authFetch('/api/spreads')
+        .then((r) => r.json())
+        .then((json) => {
+          if (json.spreads) {
+            stateRef.current.spreads = json.spreads;
+            render();
+          }
+        })
+        .catch(() => {});
+    }, 1800000);
+
     return () => {
       clearInterval(clockInterval);
       clearInterval(pollInterval);
+      clearInterval(spreadsPoll);
     };
   }, [render]);
 
@@ -276,6 +322,14 @@ interface DashboardData {
   lastSaved: string | null;
   positions: Position[];
   products: Record<string, ProductData>;
+}
+interface SpreadEntry { name: string; value: number | null; legs: string[] }
+interface SpreadsProduct {
+  product: string;
+  calendars: SpreadEntry[];
+  butterflies: SpreadEntry[];
+  contracts: { ticker: string; label: string; price: number | null }[];
+  fetchedAt: string;
 }
 
 // --- Constants ---
@@ -399,6 +453,34 @@ function renderPositionsCard(prod: ProductData, product?: string) {
   return header + rows;
 }
 
+function renderSpreadsCard(sp: SpreadsProduct | null, loading: boolean) {
+  if (!sp) return `<div class="empty-state"><div class="em-icon">◈</div><div>${loading ? 'Loading spread data...' : 'No spread data yet'}</div><div class="em-cmd">Click REFRESH to fetch prices</div></div>`;
+
+  const formatVal = (v: number | null) => {
+    if (v === null) return '<span class="sp-nil">--</span>';
+    const cls = v > 0 ? 'sp-pos' : v < 0 ? 'sp-neg' : 'sp-zero';
+    const sign = v > 0 ? '+' : '';
+    return `<span class="${cls}">${sign}${v.toFixed(2)}</span>`;
+  };
+
+  const renderGrid = (items: SpreadEntry[]) => {
+    if (!items.length) return '<div class="sp-nil" style="padding:4px 0">No data</div>';
+    return '<div class="sp-grid">' + items.map((s) =>
+      `<div class="sp-row"><span class="sp-name">${esc(s.name)}</span>${formatVal(s.value)}</div>`
+    ).join('') + '</div>';
+  };
+
+  return `
+    <div class="sp-section">
+      <div class="section-label">Calendar Spreads</div>
+      ${renderGrid(sp.calendars)}
+    </div>
+    <div class="sp-section">
+      <div class="section-label">Butterfly Spreads</div>
+      ${renderGrid(sp.butterflies)}
+    </div>`;
+}
+
 function renderOverview(data: DashboardData) {
   const allPositions: (Position & { product: string })[] = [];
   VALID_PRODUCTS.forEach((product) => {
@@ -445,14 +527,29 @@ function renderOverview(data: DashboardData) {
     <div class="full-row card"><div class="card-header"><span class="card-title">ALL OPEN POSITIONS</span></div>${posHTML}</div>`;
 }
 
-function renderProduct(data: DashboardData, product: string) {
+function renderProduct(data: DashboardData, product: string, spreads: Record<string, SpreadsProduct> | null, spreadsLoading: boolean) {
   const prod = data.products[product] || buildDefault().products[VALID_PRODUCTS[0]];
+  const sp = spreads?.[product] ?? null;
+  const isFCPO = product === 'FCPO';
+
+  // Spreads card header with timestamp and refresh button
+  const spTime = sp?.fetchedAt ? new Date(sp.fetchedAt).toUTCString().slice(0, 22) + ' UTC' : '';
+  const staleMs = sp?.fetchedAt ? Date.now() - new Date(sp.fetchedAt).getTime() : Infinity;
+  const isStale = staleMs > 30 * 60 * 1000;
+  const staleTag = isStale && sp ? ' <span class="sp-stale">(stale)</span>' : '';
+  const loadingTag = spreadsLoading ? ' <span class="sp-stale">refreshing...</span>' : '';
+
+  const spreadsCard = isFCPO
+    ? `<div class="full-row card"><div class="card-header"><span class="card-title">LIVE SPREADS</span><span class="last-updated">FCPO — coming soon</span></div><div class="card-body"><div class="empty-state"><div class="em-icon">◈</div><div>FCPO prices not yet available via Yahoo Finance</div></div></div></div>`
+    : `<div class="full-row card"><div class="card-header"><span class="card-title">LIVE SPREADS</span><div style="display:flex;align-items:center;gap:8px"><span class="last-updated">${spTime}${staleTag}${loadingTag}</span><button class="pos-add-btn" data-spreads-refresh="${product}">↻ REFRESH</button></div></div><div class="card-body">${renderSpreadsCard(sp, spreadsLoading)}</div></div>`;
+
   return `
     <div class="grid-2">
       <div class="card"><div class="card-header"><span class="card-title">REGIME + PERCENTILES</span>${prod.lastUpdated ? `<span class="last-updated">${esc(prod.lastUpdated)}</span>` : ''}</div><div class="card-body">${renderRegimeCard(prod)}</div></div>
       <div class="card"><div class="card-header"><span class="card-title">FUNDAMENTAL OUTLOOK</span></div><div class="card-body">${renderOutlookCard(prod)}</div></div>
     </div>
     <div class="full-row card"><div class="card-header"><span class="card-title">BEST OPPORTUNITIES</span></div><div class="card-body">${renderIdeasCard(prod)}</div></div>
+    ${spreadsCard}
     <div class="grid-3">
       <div class="card"><div class="card-header"><span class="card-title">KEY UPCOMING DATES</span></div><div class="card-body">${renderDatesCard(prod)}</div></div>
       <div class="card"><div class="card-header"><span class="card-title">KEY RISKS</span></div><div class="card-body">${renderRisksCard(prod)}</div></div>
@@ -684,4 +781,17 @@ body { background: var(--bg); color: var(--text); font-family: var(--sans); font
 .login-btn { width: 100%; background: var(--accent); color: var(--bg1); border: none; border-radius: 4px; padding: 10px; font-family: var(--mono); font-size: 12px; font-weight: 600; cursor: pointer; letter-spacing: 0.5px; }
 .login-btn:hover { opacity: 0.9; }
 .login-error { color: var(--red); font-size: 11px; margin-top: 10px; font-family: var(--mono); }
+.sp-section { margin-bottom: 14px; }
+.sp-section:last-child { margin-bottom: 0; }
+.sp-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0; }
+.sp-row { display: flex; justify-content: space-between; padding: 5px 10px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 11px; }
+.sp-row:last-child { border-bottom: none; }
+.sp-name { color: var(--muted2); }
+.sp-pos { color: var(--green); font-weight: 500; }
+.sp-neg { color: var(--red); font-weight: 500; }
+.sp-zero { color: var(--muted); }
+.sp-nil { color: var(--muted); }
+.sp-stale { color: var(--amber); font-family: var(--mono); font-size: 10px; }
+@media (max-width: 900px) { .sp-grid { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 600px) { .sp-grid { grid-template-columns: 1fr; } }
 `;
