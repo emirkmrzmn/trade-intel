@@ -107,9 +107,10 @@ export function generateActiveContracts(product: string, referenceDate: Date): C
     }
   }
 
-  // Calculate the 1-year cutoff: ~13 months from reference date
+  // Calculate the cutoff: 18 months from reference date to ensure full spread
+  // coverage for products with sparse active months (e.g. ICE softs with 5/yr)
   const cutoffDate = new Date(referenceDate);
-  cutoffDate.setMonth(cutoffDate.getMonth() + 13);
+  cutoffDate.setMonth(cutoffDate.getMonth() + 18);
   const cutoffYear = cutoffDate.getFullYear();
   const cutoffMonth = cutoffDate.getMonth() + 1; // 1-12
 
