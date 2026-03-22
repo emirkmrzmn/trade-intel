@@ -3,14 +3,17 @@ import { checkAuth } from '@/app/lib/auth';
 import { NextRequest, NextResponse } from 'next/server';
 import { after } from 'next/server';
 import {
-  SPREAD_PRODUCTS,
+  YAHOO_SPREAD_PRODUCTS,
+  ALL_SPREAD_PRODUCTS,
   generateActiveContracts,
+  generateFCPOContracts,
   computeCalendarSpreads,
   computeButterflies,
   type ProductSpreads,
   type AllSpreadsData,
 } from '@/app/lib/contracts';
 import { fetchPrices } from '@/app/lib/yahoo';
+import { fetchFCPOPrices } from '@/app/lib/bursa';
 
 const STALE_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -20,7 +23,7 @@ async function refreshSpreads() {
     const productContracts: Record<string, ReturnType<typeof generateActiveContracts>> = {};
     const allTickers: string[] = [];
 
-    for (const product of SPREAD_PRODUCTS) {
+    for (const product of YAHOO_SPREAD_PRODUCTS) {
       const contracts = generateActiveContracts(product, now);
       productContracts[product] = contracts;
       for (const c of contracts) {
@@ -28,11 +31,21 @@ async function refreshSpreads() {
       }
     }
 
-    const prices = await fetchPrices(allTickers);
+    // FCPO contracts
+    const fcpoContracts = generateFCPOContracts(now);
+    productContracts['FCPO'] = fcpoContracts;
+
+    // Fetch from both sources in parallel
+    const [yahooPrices, fcpoPrices] = await Promise.all([
+      fetchPrices(allTickers),
+      fetchFCPOPrices(),
+    ]);
+
+    const prices: Record<string, number> = { ...yahooPrices, ...fcpoPrices };
     const fetchedAt = now.toISOString();
     const spreads: Record<string, ProductSpreads> = {};
 
-    for (const product of SPREAD_PRODUCTS) {
+    for (const product of ALL_SPREAD_PRODUCTS) {
       const contracts = productContracts[product];
       spreads[product] = {
         product,
@@ -50,7 +63,7 @@ async function refreshSpreads() {
     const data: AllSpreadsData = { fetchedAt, spreads };
     await redis.set('spreads:all', JSON.stringify(data));
     await redis.expire('spreads:all', 86400);
-    console.log(`[spreads] Background refresh complete: ${Object.keys(prices).length} prices`);
+    console.log(`[spreads] Background refresh complete: ${Object.keys(yahooPrices).length} Yahoo + ${Object.keys(fcpoPrices).length} Bursa prices`);
   } catch (err) {
     console.error('[spreads] Background refresh failed:', err);
   }

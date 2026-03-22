@@ -2,14 +2,17 @@ import { redis } from '@/app/lib/redis';
 import { checkAuth } from '@/app/lib/auth';
 import { NextRequest, NextResponse } from 'next/server';
 import {
-  SPREAD_PRODUCTS,
+  YAHOO_SPREAD_PRODUCTS,
+  ALL_SPREAD_PRODUCTS,
   generateActiveContracts,
+  generateFCPOContracts,
   computeCalendarSpreads,
   computeButterflies,
   type ProductSpreads,
   type AllSpreadsData,
 } from '@/app/lib/contracts';
 import { fetchPrices } from '@/app/lib/yahoo';
+import { fetchFCPOPrices } from '@/app/lib/bursa';
 
 export async function POST(req: NextRequest) {
   const denied = checkAuth(req);
@@ -18,11 +21,11 @@ export async function POST(req: NextRequest) {
   try {
     const now = new Date();
 
-    // 1. Generate tickers for all products
+    // 1. Generate tickers for Yahoo-based products
     const productContracts: Record<string, ReturnType<typeof generateActiveContracts>> = {};
     const allTickers: string[] = [];
 
-    for (const product of SPREAD_PRODUCTS) {
+    for (const product of YAHOO_SPREAD_PRODUCTS) {
       const contracts = generateActiveContracts(product, now);
       productContracts[product] = contracts;
       for (const c of contracts) {
@@ -32,18 +35,28 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    console.log(`[spreads/refresh] Fetching ${allTickers.length} tickers across ${SPREAD_PRODUCTS.length} products`);
+    // Generate FCPO contracts separately
+    const fcpoContracts = generateFCPOContracts(now);
+    productContracts['FCPO'] = fcpoContracts;
 
-    // 2. Fetch all prices in one go
-    const prices = await fetchPrices(allTickers);
+    console.log(`[spreads/refresh] Fetching ${allTickers.length} Yahoo tickers + FCPO from Bursa`);
+
+    // 2. Fetch prices from both sources in parallel
+    const [yahooPrices, fcpoPrices] = await Promise.all([
+      fetchPrices(allTickers),
+      fetchFCPOPrices(),
+    ]);
+
+    // Merge all prices into one map
+    const prices: Record<string, number> = { ...yahooPrices, ...fcpoPrices };
     const fetchedCount = Object.keys(prices).length;
-    console.log(`[spreads/refresh] Got ${fetchedCount}/${allTickers.length} prices`);
+    console.log(`[spreads/refresh] Got ${Object.keys(yahooPrices).length} Yahoo + ${Object.keys(fcpoPrices).length} Bursa prices`);
 
-    // 3. Compute spreads per product
+    // 3. Compute spreads per product (including FCPO)
     const fetchedAt = now.toISOString();
     const spreads: Record<string, ProductSpreads> = {};
 
-    for (const product of SPREAD_PRODUCTS) {
+    for (const product of ALL_SPREAD_PRODUCTS) {
       const contracts = productContracts[product];
       const calendars = computeCalendarSpreads(contracts, prices);
       const butterflies = computeButterflies(contracts, prices);
@@ -69,8 +82,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       fetchedAt,
-      productCount: SPREAD_PRODUCTS.length,
-      tickerCount: allTickers.length,
+      productCount: ALL_SPREAD_PRODUCTS.length,
+      tickerCount: allTickers.length + fcpoContracts.length,
       priceCount: fetchedCount,
     });
   } catch (err) {

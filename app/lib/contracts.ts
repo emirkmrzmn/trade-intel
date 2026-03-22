@@ -41,8 +41,14 @@ export const ACTIVE_MONTHS: Record<string, string[]> = {
   NQ: ['H', 'M', 'U', 'Z'],
 };
 
-// Products that support live spread fetching (everything except FCPO)
-export const SPREAD_PRODUCTS = Object.keys(ACTIVE_MONTHS);
+// FCPO active months (all 12 months, traded on Bursa Malaysia)
+export const FCPO_MONTHS = ['F', 'G', 'H', 'J', 'K', 'M', 'N', 'Q', 'U', 'V', 'X', 'Z'];
+
+// Products that use Yahoo Finance for spreads
+export const YAHOO_SPREAD_PRODUCTS = Object.keys(ACTIVE_MONTHS);
+
+// All products including FCPO
+export const ALL_SPREAD_PRODUCTS = [...YAHOO_SPREAD_PRODUCTS, 'FCPO'];
 
 export interface ContractInfo {
   ticker: string;       // e.g. "ZMK26.CBT"
@@ -207,4 +213,66 @@ export function computeButterflies(
   }
 
   return results;
+}
+
+/**
+ * Generate FCPO active contracts for the next 18 months.
+ * FCPO trades all 12 months. Uses displayLabel (e.g. "Apr26") as ticker key
+ * since prices come from Bursa Malaysia, not Yahoo Finance.
+ */
+export function generateFCPOContracts(referenceDate: Date): ContractInfo[] {
+  const months = FCPO_MONTHS;
+  const day = referenceDate.getDate();
+  const rawMonth = referenceDate.getMonth() + 1;
+  const startFromMonth = day >= 15 ? rawMonth + 1 : rawMonth;
+  const currentYear = referenceDate.getFullYear();
+  const contracts: ContractInfo[] = [];
+
+  let year = startFromMonth > 12 ? currentYear + 1 : currentYear;
+  const effectiveMonth = startFromMonth > 12 ? 1 : startFromMonth;
+  let startIdx = 0;
+
+  for (let i = 0; i < months.length; i++) {
+    if (MONTH_CODES[months[i]] >= effectiveMonth) {
+      startIdx = i;
+      break;
+    }
+    if (i === months.length - 1) {
+      startIdx = 0;
+      year = year + 1;
+    }
+  }
+
+  const cutoffDate = new Date(referenceDate);
+  cutoffDate.setMonth(cutoffDate.getMonth() + 18);
+  const cutoffYear = cutoffDate.getFullYear();
+  const cutoffMonth = cutoffDate.getMonth() + 1;
+
+  let idx = startIdx;
+  let y = year;
+  while (true) {
+    const code = months[idx];
+    const monthNum = MONTH_CODES[code];
+    if (y > cutoffYear || (y === cutoffYear && monthNum > cutoffMonth)) break;
+
+    const monthName = MONTH_NAMES[code];
+    const yy = String(y).slice(-2);
+    const label = `${monthName}${yy}`;
+
+    contracts.push({
+      ticker: label,  // For FCPO, ticker IS the label (used as price lookup key)
+      monthCode: code,
+      monthName,
+      year: y,
+      displayLabel: label,
+    });
+
+    idx++;
+    if (idx >= months.length) {
+      idx = 0;
+      y++;
+    }
+  }
+
+  return contracts;
 }

@@ -626,7 +626,6 @@ function renderOverview(data: DashboardData) {
 function renderProduct(data: DashboardData, product: string, spreads: Record<string, SpreadsProduct> | null, spreadsLoading: boolean) {
   const prod = data.products[product] || buildDefault().products[VALID_PRODUCTS[0]];
   const sp = spreads?.[product] ?? null;
-  const isFCPO = product === 'FCPO';
 
   // Spreads card header with timestamp and refresh button
   const spTime = sp?.fetchedAt ? new Date(sp.fetchedAt).toUTCString().slice(0, 22) + ' UTC' : '';
@@ -635,9 +634,7 @@ function renderProduct(data: DashboardData, product: string, spreads: Record<str
   const staleTag = isStale && sp ? ' <span class="sp-stale">(stale)</span>' : '';
   const loadingTag = spreadsLoading ? ' <span class="sp-stale">refreshing...</span>' : '';
 
-  const spreadsCard = isFCPO
-    ? `<div class="full-row card"><div class="card-header"><span class="card-title">LIVE SPREADS</span><span class="last-updated">FCPO — coming soon</span></div><div class="card-body"><div class="empty-state"><div class="em-icon">◈</div><div>FCPO prices not yet available via Yahoo Finance</div></div></div></div>`
-    : `<div class="full-row card"><div class="card-header"><span class="card-title">LIVE SPREADS</span><div style="display:flex;align-items:center;gap:8px"><span class="last-updated">${spTime}${staleTag}${loadingTag}</span><button class="pos-add-btn" data-spreads-refresh="${product}">↻ REFRESH</button></div></div><div class="card-body">${renderSpreadsCard(sp, spreadsLoading, prod.spreadPercentiles)}</div></div>`;
+  const spreadsCard = `<div class="full-row card"><div class="card-header"><span class="card-title">LIVE SPREADS</span><div style="display:flex;align-items:center;gap:8px"><span class="last-updated">${spTime}${staleTag}${loadingTag}</span><button class="pos-add-btn" data-spreads-refresh="${product}">↻ REFRESH</button></div></div><div class="card-body">${renderSpreadsCard(sp, spreadsLoading, prod.spreadPercentiles)}</div></div>`;
 
   return `
     <div class="grid-2">
