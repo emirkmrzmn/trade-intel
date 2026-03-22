@@ -1,92 +1,85 @@
 /**
- * Fetch FCPO contract prices from Bursa Malaysia's public API.
- * Returns a map of contract label (e.g. "Apr26") -> settlement price.
+ * Fetch FCPO contract prices from TradingView's scanner API.
+ * Bursa Malaysia's site is behind Cloudflare protection, so we use
+ * TradingView which has all FCPO contract months available.
+ * Returns a map of contract label (e.g. "Apr26") -> close price.
  */
 
-const BURSA_API = 'https://www.bursamalaysia.com/api/v1/derivatives_prices/derivatives_prices';
+const TV_SCANNER_URL = 'https://scanner.tradingview.com/futures/scan';
 
-const MONTH_MAP: Record<string, string> = {
-  Jan: 'Jan', Feb: 'Feb', Mar: 'Mar', Apr: 'Apr', May: 'May', Jun: 'Jun',
-  Jul: 'Jul', Aug: 'Aug', Sep: 'Sep', Oct: 'Oct', Nov: 'Nov', Dec: 'Dec',
+const MONTH_CODE_TO_NAME: Record<string, string> = {
+  F: 'Jan', G: 'Feb', H: 'Mar', J: 'Apr', K: 'May', M: 'Jun',
+  N: 'Jul', Q: 'Aug', U: 'Sep', V: 'Oct', X: 'Nov', Z: 'Dec',
 };
 
-interface BursaRow {
-  contract: string;
-  expiry: string;     // e.g. "Apr 2026"
-  settlement: number;
-  lastDone: number;
-}
-
-function parsePrice(s: string): number | null {
-  if (!s || s === '-') return null;
-  const n = parseFloat(s.replace(/,/g, ''));
-  return isNaN(n) ? null : n;
-}
-
-function stripHtml(s: string): string {
-  return s.replace(/<[^>]*>/g, '').trim();
+interface TVScanResult {
+  data: Array<{
+    s: string;  // e.g. "MYX:FCPOK2026"
+    d: [number, string]; // [close_price, description]
+  }>;
 }
 
 /**
- * Fetch all FCPO contract month prices from Bursa Malaysia.
- * Returns a map keyed by display label (e.g. "Apr26") -> price (settlement or last done).
+ * Fetch all FCPO contract month prices from TradingView.
+ * Returns a map keyed by display label (e.g. "Apr26") -> price.
  */
 export async function fetchFCPOPrices(): Promise<Record<string, number>> {
   const prices: Record<string, number> = {};
 
   try {
-    const url = `${BURSA_API}?code=FCPO&ses=day&per_page=100&page=1`;
-    const res = await fetch(url, {
+    const res = await fetch(TV_SCANNER_URL, {
+      method: 'POST',
       headers: {
+        'Content-Type': 'application/json',
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-        Accept: 'application/json',
       },
+      body: JSON.stringify({
+        columns: ['close', 'description'],
+        filter: [{ left: 'name', operation: 'match', right: 'FCPO' }],
+        options: { lang: 'en' },
+        range: [0, 50],
+        sort: { sortBy: 'name', sortOrder: 'asc' },
+      }),
     });
 
     if (!res.ok) {
-      console.error(`[bursa] HTTP ${res.status}`);
+      console.error(`[fcpo] TradingView HTTP ${res.status}`);
       return prices;
     }
 
-    const json = await res.json() as {
-      data?: Array<Array<string | number>>;
-    };
+    const json = await res.json() as TVScanResult;
 
     if (!json.data?.length) {
-      console.error('[bursa] No data returned');
+      console.error('[fcpo] No data returned from TradingView');
       return prices;
     }
 
-    // Each row: [index, contract_html, expiry, open, bid, ask, lastDone, change, high, low, volume, openInterest, settlement]
     for (const row of json.data) {
-      if (!Array.isArray(row) || row.length < 13) continue;
+      const symbol = row.s; // e.g. "MYX:FCPOK2026"
+      const closePrice = row.d[0];
 
-      const contract = stripHtml(String(row[1]));
-      if (contract !== 'FCPO') continue;
+      if (!symbol || typeof closePrice !== 'number') continue;
 
-      const expiry = String(row[2]).trim(); // e.g. "Apr 2026"
-      const settlement = parsePrice(String(row[12]));
-      const lastDone = parsePrice(String(row[6]));
+      // Skip continuous contracts (FCPO1!, FCPO2!, etc.)
+      if (symbol.includes('!')) continue;
 
-      // Use settlement if available, otherwise last done
-      const price = settlement ?? lastDone;
-      if (price === null) continue;
+      // Parse "MYX:FCPOK2026" -> month code "K", year "2026"
+      const match = symbol.match(/FCPO([A-Z])(\d{4})$/);
+      if (!match) continue;
 
-      // Parse expiry "Apr 2026" -> "Apr26"
-      const parts = expiry.split(' ');
-      if (parts.length !== 2) continue;
-      const monthStr = parts[0];
-      const yearStr = parts[1].slice(-2); // "2026" -> "26"
+      const monthCode = match[1];
+      const year = match[2];
+      const monthName = MONTH_CODE_TO_NAME[monthCode];
+      if (!monthName) continue;
 
-      if (!MONTH_MAP[monthStr]) continue;
-
-      const label = `${monthStr}${yearStr}`;
-      prices[label] = price;
+      const yy = year.slice(-2); // "2026" -> "26"
+      const label = `${monthName}${yy}`;
+      prices[label] = closePrice;
     }
 
-    console.log(`[bursa] Fetched ${Object.keys(prices).length} FCPO contract prices`);
+    console.log(`[fcpo] Fetched ${Object.keys(prices).length} FCPO contract prices from TradingView`);
   } catch (err) {
-    console.error('[bursa] Error:', err instanceof Error ? err.message : err);
+    console.error('[fcpo] Error:', err instanceof Error ? err.message : err);
   }
 
   return prices;
