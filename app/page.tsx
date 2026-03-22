@@ -156,6 +156,36 @@ export default function Dashboard() {
       });
     });
 
+    // Range bar hover tooltips
+    appRef.current.querySelectorAll('.rb-wrap[data-tt-live]').forEach((el) => {
+      const wrap = el as HTMLElement;
+      let tooltip: HTMLElement | null = null;
+      wrap.addEventListener('mouseenter', (e) => {
+        tooltip = document.createElement('div');
+        tooltip.className = 'rb-tooltip';
+        tooltip.innerHTML = `
+          <div class="rb-tt-row"><span>Live:</span><span style="color:#00d2d2">${wrap.dataset.ttLive}</span></div>
+          <div class="rb-tt-divider"></div>
+          <div class="rb-tt-row"><span>Max:</span><span>${wrap.dataset.ttMax}</span></div>
+          <div class="rb-tt-row"><span>P95:</span><span>${wrap.dataset.ttP95}</span></div>
+          <div class="rb-tt-row"><span>P90:</span><span>${wrap.dataset.ttP90}</span></div>
+          <div class="rb-tt-row"><span>P75:</span><span>${wrap.dataset.ttP75}</span></div>
+          <div class="rb-tt-row"><span>P50:</span><span>${wrap.dataset.ttP50}</span></div>
+          <div class="rb-tt-row"><span>P25:</span><span>${wrap.dataset.ttP25}</span></div>
+          <div class="rb-tt-row"><span>P10:</span><span>${wrap.dataset.ttP10}</span></div>
+          <div class="rb-tt-row"><span>P5:</span><span>${wrap.dataset.ttP5}</span></div>
+          <div class="rb-tt-row"><span>Min:</span><span>${wrap.dataset.ttMin}</span></div>`;
+        document.body.appendChild(tooltip);
+        const rect = wrap.getBoundingClientRect();
+        tooltip.style.left = `${rect.left + rect.width / 2 - 70}px`;
+        tooltip.style.top = `${rect.top - tooltip.offsetHeight - 6 + window.scrollY}px`;
+      });
+      wrap.addEventListener('mouseleave', () => {
+        tooltip?.remove();
+        tooltip = null;
+      });
+    });
+
     // Spreads refresh buttons
     appRef.current.querySelectorAll('[data-spreads-refresh]').forEach((el) => {
       el.addEventListener('click', async () => {
@@ -470,6 +500,13 @@ function renderSpreadsCard(sp: SpreadsProduct | null, loading: boolean, spPct: S
   // e.g. "May-Jul26" → "May-Jul", "Dec26-Mar27" → "Dec-Mar", "May/Jul/Sep26" → "May/Jul/Sep"
   const normalizeName = (name: string) => name.replace(/\d{2}/g, '').replace(/\s+/g, '');
 
+  // For butterflies, also try "X Fly" format (e.g. "Feb/Apr/May" → "Feb Fly")
+  const butterflyFlyName = (name: string) => {
+    const norm = normalizeName(name);
+    const firstMonth = norm.split('/')[0];
+    return firstMonth ? `${firstMonth} Fly` : '';
+  };
+
   const renderRangeBar = (pct: SpreadPctEntry, liveVal: number) => {
     const range = pct.p95 - pct.p5;
     if (range <= 0) return '';
@@ -503,8 +540,11 @@ function renderSpreadsCard(sp: SpreadsProduct | null, loading: boolean, spPct: S
     </div>`;
   };
 
-  const renderRow = (s: SpreadEntry, pctMap: Record<string, SpreadPctEntry> | undefined) => {
-    const pct = pctMap?.[normalizeName(s.name)];
+  const renderRow = (s: SpreadEntry, pctMap: Record<string, SpreadPctEntry> | undefined, isFly = false) => {
+    const norm = normalizeName(s.name);
+    let pct = pctMap?.[norm];
+    // For butterflies, also try "X Fly" format (e.g. "Feb Fly" instead of "Feb/Apr/May")
+    if (!pct && isFly) pct = pctMap?.[butterflyFlyName(s.name)];
     const hasBar = pct && s.value !== null;
     return `<div class="rb-row">
       <span class="rb-name">${esc(s.name)}</span>
@@ -513,8 +553,8 @@ function renderSpreadsCard(sp: SpreadsProduct | null, loading: boolean, spPct: S
     </div>`;
   };
 
-  const calRows = sp.calendars.map((s) => renderRow(s, spPct?.calendars)).join('');
-  const flyRows = sp.butterflies.map((s) => renderRow(s, spPct?.butterflies)).join('');
+  const calRows = sp.calendars.map((s) => renderRow(s, spPct?.calendars, false)).join('');
+  const flyRows = sp.butterflies.map((s) => renderRow(s, spPct?.butterflies, true)).join('');
 
   return `
     <div class="rb-cols">
@@ -874,4 +914,7 @@ body { background: var(--bg); color: var(--text); font-family: var(--sans); font
 .rb-leg-inner { width: 18px; height: 8px; background: rgba(45,52,72,0.9); border-radius: 2px; }
 .rb-leg-dot { width: 8px; height: 8px; border-radius: 50%; background: #00d2d2; }
 .rb-leg-tick { width: 1px; height: 10px; background: rgba(100,108,130,0.8); margin: 0 4px; }
+.rb-tooltip { position: absolute; z-index: 50; background: rgba(20,22,32,0.97); border: 1px solid rgba(60,65,85,0.8); border-radius: 5px; padding: 8px 12px; font-family: var(--mono); font-size: 10px; pointer-events: none; min-width: 120px; box-shadow: 0 4px 16px rgba(0,0,0,0.5); }
+.rb-tt-row { display: flex; justify-content: space-between; gap: 16px; padding: 1px 0; color: var(--muted2); }
+.rb-tt-divider { height: 1px; background: var(--border); margin: 3px 0; }
 `;
