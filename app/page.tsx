@@ -189,7 +189,7 @@ export default function Dashboard() {
 
 // --- Types ---
 interface Percentile { label: string; value: number }
-interface Idea { name: string; direction: string; rationale: string; confidence: string }
+interface Idea { tier: string; contract: string; direction: string; entry_date: string; entry_price: string; exit_date: string; exit_price: string; rationale: string }
 interface DateEntry { date: string; label: string; note: string; urgency: string }
 interface Position { instrument: string; direction: string; qty: string; entry: string; pnl: string }
 interface ProductData {
@@ -247,12 +247,12 @@ function regimeClass(t: string) {
   return m[t] || 'regime-neutral';
 }
 
-function confClass(c: string) {
-  if (!c) return 'conf-med';
-  const l = c.toLowerCase();
-  if (l === 'high') return 'conf-high';
-  if (l === 'low') return 'conf-low';
-  return 'conf-med';
+function tierClass(t: string) {
+  if (!t) return 'tier-3';
+  const n = t.toString().replace(/[^0-9]/g, '');
+  if (n === '1') return 'tier-1';
+  if (n === '2') return 'tier-2';
+  return 'tier-3';
 }
 
 function urgClass(u: string) {
@@ -292,9 +292,19 @@ function renderOutlookCard(prod: ProductData) {
 
 function renderIdeasCard(prod: ProductData) {
   if (!prod.ideas?.length) return `<div class="empty-state"><div class="em-icon">◈</div><div>No trade ideas</div><div class="em-cmd">PUSH trade ideas</div></div>`;
-  return prod.ideas.map((idea) => `
-    <div class="idea-row"><div><div class="idea-name">${esc(idea.name || '')}</div><div class="idea-desc">${esc(idea.rationale || '')}</div></div>
-    <div class="idea-meta"><div><span class="conf-badge ${confClass(idea.confidence)}">${esc(idea.confidence || 'MED')}</span></div><div class="idea-dir">${esc(idea.direction || '')}</div></div></div>`).join('');
+  const rows = prod.ideas.map((idea) => {
+    const dir = (idea.direction || '').toUpperCase();
+    const dirCls = dir === 'LONG' ? 'dir-long' : dir === 'SHORT' ? 'dir-short' : '';
+    const rationaleRow = idea.rationale ? `<tr class="idea-rationale-row"><td colspan="5" class="idea-rationale">${esc(idea.rationale)}</td></tr>` : '';
+    return `<tr>
+      <td><span class="tier-badge ${tierClass(idea.tier)}">${esc(idea.tier || '—')}</span></td>
+      <td class="idea-contract">${esc(idea.contract || '—')}</td>
+      <td><span class="${dirCls}">${esc(dir || '—')}</span></td>
+      <td class="idea-entry">${esc(idea.entry_date || '—')}<br><span class="idea-price">${esc(idea.entry_price || '—')}</span></td>
+      <td class="idea-exit">${esc(idea.exit_date || '—')}<br><span class="idea-price">${esc(idea.exit_price || '—')}</span></td>
+    </tr>${rationaleRow}`;
+  }).join('');
+  return `<table class="ideas-table"><thead><tr><th>TIER</th><th>CONTRACT</th><th>DIR</th><th>ENTRY</th><th>EXIT</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function renderDatesCard(prod: ProductData) {
@@ -400,7 +410,7 @@ function renderModal(parseMsg: { ok: boolean; msg: string } | null) {
           <div class="modal-hint" style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
             <strong style="color:var(--muted2)">JSON schema</strong><br>
             Required: <code style="color:var(--accent)">product</code><br>
-            Optional: <code style="color:var(--muted2)">regime</code>, <code>regimeType</code> (bull/bear/neutral/transition), <code>percentiles</code> [{label,value}], <code>outlook</code> [strings], <code>ideas</code> [{name,direction,rationale,confidence}], <code>dates</code> [{date,label,note,urgency}], <code>positions</code> [{instrument,direction,qty,entry,pnl}], <code>risks</code> [strings]
+            Optional: <code style="color:var(--muted2)">regime</code>, <code>regimeType</code> (bull/bear/neutral/transition), <code>percentiles</code> [{label,value}], <code>outlook</code> [strings], <code>ideas</code> [{tier,contract,direction,entry_date,entry_price,exit_date,exit_price,rationale}], <code>dates</code> [{date,label,note,urgency}], <code>positions</code> [{instrument,direction,qty,entry,pnl}], <code>risks</code> [strings]
           </div>
         </div>
       </div>
@@ -524,16 +534,20 @@ body { background: var(--bg); color: var(--text); font-family: var(--sans); font
 .outlook-bullets { list-style: none; padding: 0; }
 .outlook-bullets li { padding: 3px 0; color: var(--muted2); font-size: 12px; display: flex; gap: 8px; }
 .outlook-bullets li::before { content: '›'; color: var(--accent); flex-shrink: 0; }
-.idea-row { border: 1px solid var(--border); border-radius: 4px; padding: 9px 11px; margin-bottom: 7px; display: grid; grid-template-columns: 1fr auto; align-items: start; gap: 8px; }
-.idea-row:last-child { margin-bottom: 0; }
-.idea-name { font-family: var(--mono); font-size: 12px; font-weight: 500; color: var(--accent); }
-.idea-desc { font-size: 11px; color: var(--muted2); margin-top: 2px; }
-.idea-meta { text-align: right; }
-.conf-badge { font-family: var(--mono); font-size: 10px; padding: 2px 7px; border-radius: 3px; font-weight: 500; }
-.conf-high { background: rgba(34,197,94,0.15); color: var(--green); }
-.conf-med { background: rgba(245,158,11,0.15); color: var(--amber); }
-.conf-low { background: rgba(100,116,139,0.15); color: var(--muted2); }
-.idea-dir { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 3px; }
+.ideas-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.ideas-table th { font-family: var(--mono); font-size: 10px; color: var(--muted); font-weight: 500; text-align: left; padding: 4px 8px 6px; border-bottom: 1px solid var(--border); letter-spacing: 0.5px; }
+.ideas-table td { font-family: var(--mono); font-size: 11px; color: var(--muted2); padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.ideas-table tr:last-child td { border-bottom: none; }
+.ideas-table .idea-contract { color: var(--accent); font-weight: 500; }
+.ideas-table .idea-price { color: var(--text); font-weight: 500; }
+.ideas-table .dir-long { color: var(--green); font-weight: 500; }
+.ideas-table .dir-short { color: var(--red); font-weight: 500; }
+.ideas-table .idea-rationale-row td { border-bottom: 1px solid var(--bg4); padding: 2px 8px 8px; }
+.ideas-table .idea-rationale { font-family: var(--sans); font-size: 11px; color: var(--muted); font-style: italic; line-height: 1.5; }
+.tier-badge { font-family: var(--mono); font-size: 10px; padding: 2px 7px; border-radius: 3px; font-weight: 500; }
+.tier-1 { background: rgba(34,197,94,0.15); color: var(--green); }
+.tier-2 { background: rgba(245,158,11,0.15); color: var(--amber); }
+.tier-3 { background: rgba(100,116,139,0.15); color: var(--muted2); }
 .date-row { display: flex; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border); align-items: baseline; }
 .date-row:last-child { border-bottom: none; }
 .date-d { font-family: var(--mono); font-size: 11px; color: var(--accent); width: 80px; flex-shrink: 0; }
