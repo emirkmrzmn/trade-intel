@@ -82,7 +82,7 @@ export async function fetchPrices(tickers: string[]): Promise<Record<string, num
         // Fall back to LTP if bid/ask unavailable.
         const hasBidAsk = typeof q.bid === 'number' && typeof q.ask === 'number' && q.bid > 0 && q.ask > 0;
         if (hasBidAsk) {
-          prices[q.symbol] = Math.floor((q.bid + q.ask) / 2 * 100) / 100; // round down to 2dp
+          prices[q.symbol] = Math.floor((q.bid! + q.ask!) / 2 * 100) / 100; // round down to 2dp
         } else if (typeof q.regularMarketPrice === 'number') {
           prices[q.symbol] = q.regularMarketPrice;
         }
