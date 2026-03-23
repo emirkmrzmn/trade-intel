@@ -552,6 +552,16 @@ function countLegs(instrument: string): number {
   return extractMonths(instrument).length;
 }
 
+/** Check if a position instrument contains fly/butterfly keywords */
+function isFlyPosition(inst: string): boolean {
+  return /fly|butterfly/i.test(inst);
+}
+
+/** Check if a position instrument contains calendar/cal/spread keywords */
+function isCalPosition(inst: string): boolean {
+  return /cal|calendar|spread/i.test(inst);
+}
+
 function findPositionMatch(spreadName: string, positions: Position[], isFly: boolean): PositionMatch | null {
   if (!positions?.length) return null;
 
@@ -561,13 +571,40 @@ function findPositionMatch(spreadName: string, positions: Position[], isFly: boo
 
   for (const pos of positions) {
     const inst = pos.instrument || '';
-    const posLegs = countLegs(inst);
-
-    // Only match calendars to calendar positions, flies to fly positions
-    if (posLegs !== expectedLegs) continue;
-
     const posMonths = extractMonths(inst);
     const posYears = extractYears(inst);
+    const posLegs = posMonths.length;
+
+    // Shorthand format: "May26 Fly" (1 month + fly keyword) → match by first month
+    // e.g. "May26 Fly" matches "May/Jun/Jul26" butterfly row
+    if (isFly && posLegs === 1 && isFlyPosition(inst)) {
+      if (spreadMonths.length >= 1 && posMonths[0] === spreadMonths[0]) {
+        // Year check
+        if (spreadYears.length > 0 && posYears.length > 0) {
+          if (!spreadYears.some(y => posYears.includes(y))) continue;
+        }
+        return { direction: (pos.direction || '').toLowerCase() };
+      }
+      continue;
+    }
+
+    // Shorthand format: "May26 Cal" (1 month + cal keyword) → match by first month
+    if (!isFly && posLegs === 1 && isCalPosition(inst)) {
+      if (spreadMonths.length >= 1 && posMonths[0] === spreadMonths[0]) {
+        if (spreadYears.length > 0 && posYears.length > 0) {
+          if (!spreadYears.some(y => posYears.includes(y))) continue;
+        }
+        return { direction: (pos.direction || '').toLowerCase() };
+      }
+      continue;
+    }
+
+    // Full format: all months spelled out — must match leg count
+    if (posLegs !== expectedLegs) continue;
+
+    // If position has fly/cal keyword, make sure it matches the row type
+    if (isFlyPosition(inst) && !isFly) continue;
+    if (isCalPosition(inst) && isFly) continue;
 
     // All months must match in order
     if (posMonths.length !== spreadMonths.length) continue;
@@ -575,8 +612,7 @@ function findPositionMatch(spreadName: string, positions: Position[], isFly: boo
 
     // If both have year info, years must overlap
     if (spreadYears.length > 0 && posYears.length > 0) {
-      const hasYearOverlap = spreadYears.some(y => posYears.includes(y));
-      if (!hasYearOverlap) continue;
+      if (!spreadYears.some(y => posYears.includes(y))) continue;
     }
 
     return { direction: (pos.direction || '').toLowerCase() };
