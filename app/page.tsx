@@ -486,7 +486,63 @@ function renderPositionsCard(prod: ProductData, product?: string) {
   return header + rows;
 }
 
-function renderSpreadsCard(sp: SpreadsProduct | null, loading: boolean, spPct: SpreadPercentiles | null) {
+/**
+ * Normalize a spread/position name for matching.
+ * Strips product codes, years, whitespace, and lowercases.
+ * "ZL Oct-Dec26" → "oct-dec", "Oct-Dec26" → "oct-dec",
+ * "ZLV-Z26" → "v-z", "Oct/Dec/Feb27" → "oct/dec/feb"
+ */
+function normalizeForMatch(name: string): string {
+  let s = name.trim().toLowerCase();
+  // Strip product codes at start (2-4 uppercase letters before a space or month)
+  s = s.replace(/^[a-z]{2,4}\s*/i, '');
+  // Strip all year digits (2 or 4 digit years)
+  s = s.replace(/20\d{2}/g, '').replace(/\d{2}/g, '');
+  // Strip whitespace
+  s = s.replace(/\s+/g, '');
+  return s;
+}
+
+// Month code to name and vice versa for matching "V-Z" style to "Oct-Dec" style
+const MC_TO_NAME: Record<string, string> = {
+  f:'jan',g:'feb',h:'mar',j:'apr',k:'may',m:'jun',
+  n:'jul',q:'aug',u:'sep',v:'oct',x:'nov',z:'dec'
+};
+
+function expandMonthCodes(s: string): string {
+  // Replace single-letter month codes like "v-z" → "oct-dec", "v/z/h" → "oct/dec/mar"
+  return s.replace(/\b([fghjkmnquvxz])\b/gi, (_, c) => MC_TO_NAME[c.toLowerCase()] || c);
+}
+
+interface PositionMatch { direction: string }
+
+function findPositionMatch(spreadName: string, positions: Position[]): PositionMatch | null {
+  if (!positions?.length) return null;
+  const spreadNorm = normalizeForMatch(spreadName);
+  const spreadExpanded = expandMonthCodes(spreadNorm);
+
+  for (const pos of positions) {
+    const posNorm = normalizeForMatch(pos.instrument || '');
+    const posExpanded = expandMonthCodes(posNorm);
+
+    // Direct match after normalization
+    if (spreadNorm === posNorm || spreadNorm === posExpanded ||
+        spreadExpanded === posNorm || spreadExpanded === posExpanded) {
+      return { direction: (pos.direction || '').toLowerCase() };
+    }
+
+    // Check if one contains the other (handles "ZL Oct-Dec" matching "Oct-Dec")
+    if (spreadNorm.length >= 3 && posNorm.length >= 3) {
+      if (posNorm.includes(spreadNorm) || posExpanded.includes(spreadExpanded) ||
+          spreadNorm.includes(posNorm) || spreadExpanded.includes(posExpanded)) {
+        return { direction: (pos.direction || '').toLowerCase() };
+      }
+    }
+  }
+  return null;
+}
+
+function renderSpreadsCard(sp: SpreadsProduct | null, loading: boolean, spPct: SpreadPercentiles | null, positions?: Position[]) {
   if (!sp) return `<div class="empty-state"><div class="em-icon">◈</div><div>${loading ? 'Loading spread data...' : 'No spread data yet'}</div><div class="em-cmd">Click REFRESH to fetch prices</div></div>`;
 
   const formatVal = (v: number | null) => {
@@ -546,8 +602,13 @@ function renderSpreadsCard(sp: SpreadsProduct | null, loading: boolean, spPct: S
     // For butterflies, also try "X Fly" format (e.g. "Feb Fly" instead of "Feb/Apr/May")
     if (!pct && isFly) pct = pctMap?.[butterflyFlyName(s.name)];
     const hasBar = pct && s.value !== null;
-    return `<div class="rb-row">
-      <span class="rb-name">${esc(s.name)}</span>
+    const posMatch = findPositionMatch(s.name, positions || []);
+    const rowCls = posMatch ? `rb-row rb-row-active rb-row-${posMatch.direction === 'short' ? 'short' : 'long'}` : 'rb-row';
+    const dirTag = posMatch
+      ? `<span class="rb-dir rb-dir-${posMatch.direction === 'short' ? 'short' : 'long'}">${posMatch.direction === 'short' ? '▼' : '▲'}</span>`
+      : '';
+    return `<div class="${rowCls}">
+      <span class="rb-name">${esc(s.name)}${dirTag}</span>
       <span class="rb-price">${formatVal(s.value)}</span>
       ${hasBar ? renderRangeBar(pct!, s.value!) : '<div class="rb-wrap"><div class="rb-track rb-track-empty"></div></div>'}
     </div>`;
@@ -634,7 +695,7 @@ function renderProduct(data: DashboardData, product: string, spreads: Record<str
   const staleTag = isStale && sp ? ' <span class="sp-stale">(stale)</span>' : '';
   const loadingTag = spreadsLoading ? ' <span class="sp-stale">refreshing...</span>' : '';
 
-  const spreadsCard = `<div class="full-row card"><div class="card-header"><span class="card-title">LIVE SPREADS</span><div style="display:flex;align-items:center;gap:8px"><span class="last-updated">${spTime}${staleTag}${loadingTag}</span><button class="pos-add-btn" data-spreads-refresh="${product}">↻ REFRESH</button></div></div><div class="card-body">${renderSpreadsCard(sp, spreadsLoading, prod.spreadPercentiles)}</div></div>`;
+  const spreadsCard = `<div class="full-row card"><div class="card-header"><span class="card-title">LIVE SPREADS</span><div style="display:flex;align-items:center;gap:8px"><span class="last-updated">${spTime}${staleTag}${loadingTag}</span><button class="pos-add-btn" data-spreads-refresh="${product}">↻ REFRESH</button></div></div><div class="card-body">${renderSpreadsCard(sp, spreadsLoading, prod.spreadPercentiles, prod.positions)}</div></div>`;
 
   return `
     <div class="grid-2">
@@ -911,6 +972,13 @@ body { background: var(--bg); color: var(--text); font-family: var(--sans); font
 .rb-leg-inner { width: 18px; height: 8px; background: rgba(45,52,72,0.9); border-radius: 2px; }
 .rb-leg-dot { width: 8px; height: 8px; border-radius: 50%; background: #00d2d2; }
 .rb-leg-tick { width: 1px; height: 10px; background: rgba(100,108,130,0.8); margin: 0 4px; }
+.rb-row-active { border-radius: 3px; }
+.rb-row-long { border-left: 2px solid var(--green); background: rgba(34,197,94,0.04); }
+.rb-row-short { border-left: 2px solid var(--red); background: rgba(239,68,68,0.04); }
+.rb-row-active .rb-name { color: var(--text); }
+.rb-dir { font-size: 9px; margin-left: 4px; vertical-align: middle; }
+.rb-dir-long { color: var(--green); }
+.rb-dir-short { color: var(--red); }
 .rb-tooltip { position: absolute; z-index: 50; background: rgba(20,22,32,0.97); border: 1px solid rgba(60,65,85,0.8); border-radius: 5px; padding: 8px 12px; font-family: var(--mono); font-size: 10px; pointer-events: none; min-width: 120px; box-shadow: 0 4px 16px rgba(0,0,0,0.5); }
 .rb-tt-row { display: flex; justify-content: space-between; gap: 16px; padding: 1px 0; color: var(--muted2); }
 .rb-tt-divider { height: 1px; background: var(--border); margin: 3px 0; }
