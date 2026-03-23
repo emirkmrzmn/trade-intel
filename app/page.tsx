@@ -135,7 +135,6 @@ export default function Dashboard() {
               <select class="pos-input pos-select" id="pos-direction"><option value="Long">Long</option><option value="Short">Short</option></select>
               <input class="pos-input" id="pos-qty" placeholder="Qty" style="width:60px" />
               <input class="pos-input" id="pos-entry" placeholder="Entry" style="width:80px" />
-              <input class="pos-input" id="pos-pnl" placeholder="P&L" style="width:70px" />
             </div>
             <div style="display:flex;gap:6px;margin-top:6px">
               <button class="btn-apply" id="pos-submit" style="font-size:11px;padding:5px 12px">Add Position</button>
@@ -475,14 +474,41 @@ function renderRisksCard(prod: ProductData) {
   return '<ul class="risk-bullets">' + prod.risks.map((r) => `<li><span>${esc(r)}</span></li>`).join('') + '</ul>';
 }
 
-function renderPositionsCard(prod: ProductData, product?: string) {
+/** Find the live spread price for a position by matching against calendar and butterfly spreads */
+function findLivePrice(pos: Position, sp: SpreadsProduct | null): number | null {
+  if (!sp) return null;
+  const allSpreads = [...sp.calendars, ...sp.butterflies];
+  for (const spread of allSpreads) {
+    if (spread.value === null) continue;
+    const isFly = spread.name.includes('/');
+    const match = findPositionMatch(spread.name, [pos], isFly);
+    if (match) return spread.value;
+  }
+  return null;
+}
+
+function renderPositionsCard(prod: ProductData, product?: string, sp?: SpreadsProduct | null) {
   if (!prod.positions?.length) return `<div class="empty-state"><div class="em-icon">◈</div><div>No open positions</div><div class="em-cmd">Use + ADD above</div></div>`;
   const header = `<div class="pos-row-x"><div class="pos-header">Instrument</div><div class="pos-header" style="text-align:right">Dir</div><div class="pos-header" style="text-align:right">Qty</div><div class="pos-header" style="text-align:right">Entry</div><div class="pos-header" style="text-align:right">P&L</div><div></div></div>`;
   const rows = prod.positions.map((pos, i) => {
-    const pnlClass = pos.pnl && (pos.pnl.startsWith('-') || parseFloat(pos.pnl) < 0) ? 'pos-pnl-neg' : 'pos-pnl-pos';
     const dirClass = (pos.direction || '').toLowerCase() === 'short' ? 'pos-dir-short' : 'pos-dir-long';
     const closeBtn = product ? `<button class="pos-close-btn" data-pos-close="${product}" data-pos-idx="${i}">✕</button>` : '';
-    return `<div class="pos-row-x"><div class="pos-instr">${esc(pos.instrument || '')}</div><div class="${dirClass}" style="text-align:right">${esc((pos.direction || '').toUpperCase())}</div><div class="pos-num">${esc(pos.qty || '')}</div><div class="pos-num">${esc(pos.entry || '')}</div><div class="${pnlClass}">${esc(pos.pnl || '--')}</div><div style="text-align:center">${closeBtn}</div></div>`;
+
+    // Compute P&L from live price if possible
+    let pnlStr = pos.pnl || '--';
+    const entryNum = parseFloat(pos.entry);
+    const livePrice = findLivePrice(pos, sp || null);
+    if (livePrice !== null && !isNaN(entryNum)) {
+      const isShort = (pos.direction || '').toLowerCase() === 'short';
+      const rawPnl = isShort ? entryNum - livePrice : livePrice - entryNum;
+      const qty = parseInt(pos.qty) || 1;
+      const totalPnl = rawPnl * qty;
+      pnlStr = (totalPnl >= 0 ? '+' : '') + totalPnl.toFixed(2);
+    }
+
+    const pnlNum = parseFloat(pnlStr);
+    const pnlClass = !isNaN(pnlNum) && pnlNum < 0 ? 'pos-pnl-neg' : 'pos-pnl-pos';
+    return `<div class="pos-row-x"><div class="pos-instr">${esc(pos.instrument || '')}</div><div class="${dirClass}" style="text-align:right">${esc((pos.direction || '').toUpperCase())}</div><div class="pos-num">${esc(pos.qty || '')}</div><div class="pos-num">${esc(pos.entry || '')}</div><div class="${pnlClass}">${esc(pnlStr)}</div><div style="text-align:center">${closeBtn}</div></div>`;
   }).join('');
   return header + rows;
 }
@@ -786,7 +812,7 @@ function renderProduct(data: DashboardData, product: string, spreads: Record<str
     <div class="grid-3">
       <div class="card"><div class="card-header"><span class="card-title">KEY UPCOMING DATES</span></div><div class="card-body">${renderDatesCard(prod)}</div></div>
       <div class="card"><div class="card-header"><span class="card-title">KEY RISKS</span></div><div class="card-body">${renderRisksCard(prod)}</div></div>
-      <div class="card"><div class="card-header"><span class="card-title">CURRENT POSITIONS</span><button class="pos-add-btn" data-pos-add="${product}">+ ADD</button></div><div class="card-body"><div id="pos-form-${product}"></div>${renderPositionsCard(prod, product)}</div></div>
+      <div class="card"><div class="card-header"><span class="card-title">CURRENT POSITIONS</span><button class="pos-add-btn" data-pos-add="${product}">+ ADD</button></div><div class="card-body"><div id="pos-form-${product}"></div>${renderPositionsCard(prod, product, sp)}</div></div>
     </div>`;
 }
 
@@ -847,14 +873,13 @@ async function submitPosition(product: string, renderFn: () => void) {
   const direction = (document.getElementById('pos-direction') as HTMLSelectElement)?.value;
   const qty = (document.getElementById('pos-qty') as HTMLInputElement)?.value.trim() || '1';
   const entry = (document.getElementById('pos-entry') as HTMLInputElement)?.value.trim();
-  const pnl = (document.getElementById('pos-pnl') as HTMLInputElement)?.value.trim() || '--';
   if (!instrument) return;
 
   try {
     const res = await authFetch('/api/positions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'add', product, position: { instrument, direction, qty, entry, pnl } }),
+      body: JSON.stringify({ action: 'add', product, position: { instrument, direction, qty, entry, pnl: '--' } }),
     });
     const json = await res.json();
     if (json.ok) {
