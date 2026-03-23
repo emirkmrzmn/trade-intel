@@ -130,11 +130,12 @@ export default function Dashboard() {
         if (formEl.innerHTML) { formEl.innerHTML = ''; return; } // toggle off
         formEl.innerHTML = `
           <div class="pos-form">
-            <input class="pos-input" id="pos-instrument" placeholder="Instrument (e.g. FCPO May-Jun26)" />
+            <input class="pos-input" id="pos-instrument" placeholder="Instrument (e.g. May-Jun26)" />
             <div class="pos-form-row">
               <select class="pos-input pos-select" id="pos-direction"><option value="Long">Long</option><option value="Short">Short</option></select>
               <input class="pos-input" id="pos-qty" placeholder="Qty" style="width:60px" />
               <input class="pos-input" id="pos-entry" placeholder="Entry" style="width:80px" />
+              <input class="pos-input" id="pos-pnl" placeholder="P&L" style="width:70px" />
             </div>
             <div style="display:flex;gap:6px;margin-top:6px">
               <button class="btn-apply" id="pos-submit" style="font-size:11px;padding:5px 12px">Add Position</button>
@@ -846,13 +847,14 @@ async function submitPosition(product: string, renderFn: () => void) {
   const direction = (document.getElementById('pos-direction') as HTMLSelectElement)?.value;
   const qty = (document.getElementById('pos-qty') as HTMLInputElement)?.value.trim() || '1';
   const entry = (document.getElementById('pos-entry') as HTMLInputElement)?.value.trim();
+  const pnl = (document.getElementById('pos-pnl') as HTMLInputElement)?.value.trim() || '--';
   if (!instrument) return;
 
   try {
     const res = await authFetch('/api/positions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'add', product, position: { instrument, direction, qty, entry, pnl: '--' } }),
+      body: JSON.stringify({ action: 'add', product, position: { instrument, direction, qty, entry, pnl } }),
     });
     const json = await res.json();
     if (json.ok) {
