@@ -71,13 +71,19 @@ export async function fetchPrices(tickers: string[]): Promise<Record<string, num
 
       const json = await res.json() as {
         quoteResponse?: {
-          result?: Array<{ symbol?: string; regularMarketPrice?: number }>;
+          result?: Array<{ symbol?: string; regularMarketPrice?: number; bid?: number; ask?: number }>;
         };
       };
 
       const results = json?.quoteResponse?.result || [];
       for (const q of results) {
-        if (q.symbol && typeof q.regularMarketPrice === 'number') {
+        if (!q.symbol) continue;
+        // Prefer mid-price (bid+ask)/2 for accuracy on illiquid back months.
+        // Fall back to LTP if bid/ask unavailable.
+        const hasBidAsk = typeof q.bid === 'number' && typeof q.ask === 'number' && q.bid > 0 && q.ask > 0;
+        if (hasBidAsk) {
+          prices[q.symbol] = Math.floor((q.bid + q.ask) / 2 * 100) / 100; // round down to 2dp
+        } else if (typeof q.regularMarketPrice === 'number') {
           prices[q.symbol] = q.regularMarketPrice;
         }
       }
