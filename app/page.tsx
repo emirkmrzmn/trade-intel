@@ -492,11 +492,18 @@ function renderPositionsCard(prod: ProductData, product?: string) {
  * "ZL Oct-Dec26" → "oct-dec", "Oct-Dec26" → "oct-dec",
  * "ZLV-Z26" → "v-z", "Oct/Dec/Feb27" → "oct/dec/feb"
  */
+const PRODUCT_CODES = new Set(['fcpo','zc','zs','zl','zm','zw','ng','ho','rb','kc','sb','cc','ct','he','gf','le','es','nq']);
+
 function normalizeForMatch(name: string): string {
   let s = name.trim().toLowerCase();
-  // Strip product codes at start (2-4 uppercase letters before a space or month)
-  s = s.replace(/^[a-z]{2,4}\s*/i, '');
-  // Strip all year digits (2 or 4 digit years)
+  // Strip known product codes at start (e.g. "ZS " or "FCPO ")
+  const firstWord = s.split(/[\s\-\/]/)[0];
+  if (PRODUCT_CODES.has(firstWord)) {
+    s = s.slice(firstWord.length).replace(/^\s+/, '');
+  }
+  // Strip "fly" / "butterfly" / "cal" / "calendar" suffixes
+  s = s.replace(/\s*(butterfly|fly|calendar|cal|spread)\s*/gi, '');
+  // Strip all year digits (4-digit first, then 2-digit)
   s = s.replace(/20\d{2}/g, '').replace(/\d{2}/g, '');
   // Strip whitespace
   s = s.replace(/\s+/g, '');
