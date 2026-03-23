@@ -516,28 +516,63 @@ function expandMonthCodes(s: string): string {
 
 interface PositionMatch { direction: string }
 
-function findPositionMatch(spreadName: string, positions: Position[]): PositionMatch | null {
+const MONTH_NAMES_SET = new Set(['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec']);
+
+/** Extract month names from a string (e.g. "Jul26-Aug26-Sep26 Fly" → ["jul","aug","sep"]) */
+function extractMonths(s: string): string[] {
+  const expanded = expandMonthCodes(normalizeForMatch(s));
+  const months: string[] = [];
+  for (const m of MONTH_NAMES_SET) {
+    // Find all occurrences
+    let idx = expanded.indexOf(m);
+    while (idx !== -1) {
+      months.push(m);
+      idx = expanded.indexOf(m, idx + 1);
+    }
+  }
+  // Deduplicate while preserving order
+  return [...new Set(months)];
+}
+
+/** Extract year digits from a string (e.g. "Jul26-Aug26" → ["26"]) */
+function extractYears(s: string): string[] {
+  const matches = s.match(/\d{2}/g) || [];
+  return [...new Set(matches)];
+}
+
+/** Count how many legs a position has: 2 = calendar, 3 = butterfly */
+function countLegs(instrument: string): number {
+  return extractMonths(instrument).length;
+}
+
+function findPositionMatch(spreadName: string, positions: Position[], isFly: boolean): PositionMatch | null {
   if (!positions?.length) return null;
-  const spreadNorm = normalizeForMatch(spreadName);
-  const spreadExpanded = expandMonthCodes(spreadNorm);
+
+  const spreadMonths = extractMonths(spreadName);
+  const spreadYears = extractYears(spreadName);
+  const expectedLegs = isFly ? 3 : 2;
 
   for (const pos of positions) {
-    const posNorm = normalizeForMatch(pos.instrument || '');
-    const posExpanded = expandMonthCodes(posNorm);
+    const inst = pos.instrument || '';
+    const posLegs = countLegs(inst);
 
-    // Direct match after normalization
-    if (spreadNorm === posNorm || spreadNorm === posExpanded ||
-        spreadExpanded === posNorm || spreadExpanded === posExpanded) {
-      return { direction: (pos.direction || '').toLowerCase() };
+    // Only match calendars to calendar positions, flies to fly positions
+    if (posLegs !== expectedLegs) continue;
+
+    const posMonths = extractMonths(inst);
+    const posYears = extractYears(inst);
+
+    // All months must match in order
+    if (posMonths.length !== spreadMonths.length) continue;
+    if (!posMonths.every((m, i) => m === spreadMonths[i])) continue;
+
+    // If both have year info, years must overlap
+    if (spreadYears.length > 0 && posYears.length > 0) {
+      const hasYearOverlap = spreadYears.some(y => posYears.includes(y));
+      if (!hasYearOverlap) continue;
     }
 
-    // Check if one contains the other (handles "ZL Oct-Dec" matching "Oct-Dec")
-    if (spreadNorm.length >= 3 && posNorm.length >= 3) {
-      if (posNorm.includes(spreadNorm) || posExpanded.includes(spreadExpanded) ||
-          spreadNorm.includes(posNorm) || spreadExpanded.includes(posExpanded)) {
-        return { direction: (pos.direction || '').toLowerCase() };
-      }
-    }
+    return { direction: (pos.direction || '').toLowerCase() };
   }
   return null;
 }
@@ -602,7 +637,7 @@ function renderSpreadsCard(sp: SpreadsProduct | null, loading: boolean, spPct: S
     // For butterflies, also try "X Fly" format (e.g. "Feb Fly" instead of "Feb/Apr/May")
     if (!pct && isFly) pct = pctMap?.[butterflyFlyName(s.name)];
     const hasBar = pct && s.value !== null;
-    const posMatch = findPositionMatch(s.name, positions || []);
+    const posMatch = findPositionMatch(s.name, positions || [], isFly);
     const rowCls = posMatch ? `rb-row rb-row-active rb-row-${posMatch.direction === 'short' ? 'short' : 'long'}` : 'rb-row';
     const dirTag = posMatch
       ? `<span class="rb-dir rb-dir-${posMatch.direction === 'short' ? 'short' : 'long'}">${posMatch.direction === 'short' ? '▼' : '▲'}</span>`
