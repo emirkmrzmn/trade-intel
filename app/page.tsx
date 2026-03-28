@@ -23,18 +23,35 @@ export default function Dashboard() {
   const stateRef = useRef<{
     tab: string;
     modal: boolean;
+    tradeModal: boolean;
+    editingTrade: PlaybookTrade | null;
+    overviewSub: 'playbook' | 'calendar';
+    calMonth: number;
+    calYear: number;
+    pbFilter: { commodity: string; status: string; season: string; search: string };
     parseMsg: { ok: boolean; msg: string; product?: string } | null;
     data: DashboardData;
     spreads: Record<string, SpreadsProduct> | null;
     spreadsLoading: boolean;
+    playbook: PlaybookTrade[];
   }>({
     tab: 'OVERVIEW',
     modal: false,
+    tradeModal: false,
+    editingTrade: null,
+    overviewSub: 'playbook',
+    calMonth: new Date().getMonth(),
+    calYear: new Date().getFullYear(),
+    pbFilter: { commodity: '', status: '', season: '', search: '' },
     parseMsg: null,
     data: buildDefault(),
     spreads: null,
     spreadsLoading: false,
+    playbook: [],
   });
+
+  // Expose stateRef for trade form submission
+  useEffect(() => { (window as any).__stateRef = stateRef; }, []);
 
   // Check auth on mount
   useEffect(() => {
@@ -75,9 +92,10 @@ export default function Dashboard() {
       (p) =>
         `<div class="tab${tab === p ? ' active' : ''}" data-tab="${p}">${PRODUCT_LABELS[p] || p}</div>`
     ).join('');
-    const { spreads, spreadsLoading } = stateRef.current;
-    const content = tab === 'OVERVIEW' ? renderOverview(data) : renderProduct(data, tab, spreads, spreadsLoading);
+    const { spreads, spreadsLoading, playbook, overviewSub, calMonth, calYear, pbFilter, tradeModal, editingTrade } = stateRef.current;
+    const content = tab === 'OVERVIEW' ? renderOverview(data, playbook, overviewSub, pbFilter, calMonth, calYear) : renderProduct(data, tab, spreads, spreadsLoading, playbook);
     const modalHTML = modal ? renderModal(parseMsg) : '';
+    const tradeModalHTML = tradeModal ? renderTradeFormModal(editingTrade) : '';
 
     appRef.current.innerHTML = `
       <div class="header">
@@ -89,7 +107,7 @@ export default function Dashboard() {
       </div>
       <div class="tab-bar">${tabs}</div>
       <div class="main">${content}</div>
-      ${modalHTML}`;
+      ${modalHTML}${tradeModalHTML}`;
 
     clockTick();
 
@@ -202,9 +220,137 @@ export default function Dashboard() {
       });
     });
 
+    // Overview sub-tab toggles
+    appRef.current.querySelectorAll('[data-ov-sub]').forEach((el) => {
+      el.addEventListener('click', () => {
+        stateRef.current.overviewSub = el.getAttribute('data-ov-sub') as 'playbook' | 'calendar';
+        render();
+      });
+    });
+
+    // Calendar navigation
+    document.getElementById('cal-prev')?.addEventListener('click', () => {
+      stateRef.current.calMonth--;
+      if (stateRef.current.calMonth < 0) { stateRef.current.calMonth = 11; stateRef.current.calYear--; }
+      render();
+    });
+    document.getElementById('cal-next')?.addEventListener('click', () => {
+      stateRef.current.calMonth++;
+      if (stateRef.current.calMonth > 11) { stateRef.current.calMonth = 0; stateRef.current.calYear++; }
+      render();
+    });
+
+    // Playbook filter changes
+    ['pb-f-commodity', 'pb-f-status', 'pb-f-season'].forEach((id) => {
+      const el = document.getElementById(id) as HTMLSelectElement;
+      el?.addEventListener('change', () => {
+        const key = id.replace('pb-f-', '');
+        (stateRef.current.pbFilter as any)[key] = el.value;
+        render();
+      });
+    });
+    const searchEl = document.getElementById('pb-f-search') as HTMLInputElement;
+    searchEl?.addEventListener('input', () => {
+      stateRef.current.pbFilter.search = searchEl.value;
+      render();
+    });
+
+    // Add trade button
+    appRef.current.querySelectorAll('[data-add-trade]').forEach((el) => {
+      el.addEventListener('click', () => {
+        const presetCommodity = el.getAttribute('data-add-trade') || '';
+        stateRef.current.editingTrade = null;
+        stateRef.current.tradeModal = true;
+        render();
+        if (presetCommodity) {
+          setTimeout(() => {
+            const sel = document.getElementById('tf-commodity') as HTMLSelectElement;
+            if (sel) sel.value = presetCommodity;
+            updateTickDefaults();
+          }, 50);
+        }
+      });
+    });
+
+    // Edit trade buttons
+    appRef.current.querySelectorAll('[data-edit-trade]').forEach((el) => {
+      el.addEventListener('click', () => {
+        const id = el.getAttribute('data-edit-trade')!;
+        const trade = stateRef.current.playbook.find(t => t.id === id);
+        if (trade) {
+          stateRef.current.editingTrade = trade;
+          stateRef.current.tradeModal = true;
+          render();
+          setTimeout(() => populateTradeForm(trade), 50);
+        }
+      });
+    });
+
+    // Delete trade buttons
+    appRef.current.querySelectorAll('[data-delete-trade]').forEach((el) => {
+      el.addEventListener('click', async () => {
+        const id = el.getAttribute('data-delete-trade')!;
+        try {
+          await authFetch('/api/playbook', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'delete', id }),
+          });
+          stateRef.current.playbook = stateRef.current.playbook.filter(t => t.id !== id);
+          render();
+        } catch { /* ignore */ }
+      });
+    });
+
+    // Trade form modal
+    document.getElementById('tf-close')?.addEventListener('click', closeTradeModal);
+    document.getElementById('tf-cancel')?.addEventListener('click', closeTradeModal);
+    document.querySelector('.trade-modal-overlay')?.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).classList.contains('trade-modal-overlay')) closeTradeModal();
+    });
+    document.getElementById('tf-commodity')?.addEventListener('change', updateTickDefaults);
+    document.getElementById('tf-submit')?.addEventListener('click', () => submitTrade(render));
+
+    // Add note buttons
+    appRef.current.querySelectorAll('[data-add-note]').forEach((el) => {
+      el.addEventListener('click', async () => {
+        const id = el.getAttribute('data-add-note')!;
+        const input = document.getElementById(`note-input-${id}`) as HTMLInputElement;
+        const text = input?.value.trim();
+        if (!text) return;
+        try {
+          await authFetch('/api/playbook', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'addNote', id, text }),
+          });
+          const trade = stateRef.current.playbook.find(t => t.id === id);
+          if (trade) {
+            if (!trade.notes) trade.notes = [];
+            trade.notes.push({ text, ts: new Date().toISOString() });
+          }
+          render();
+        } catch { /* ignore */ }
+      });
+    });
+
+    // Toggle trade card details
+    appRef.current.querySelectorAll('[data-toggle-card]').forEach((el) => {
+      el.addEventListener('click', () => {
+        const detailEl = document.getElementById(`trade-detail-${el.getAttribute('data-toggle-card')}`);
+        if (detailEl) detailEl.style.display = detailEl.style.display === 'none' ? 'block' : 'none';
+      });
+    });
+
     function closeModal() {
       stateRef.current.modal = false;
       stateRef.current.parseMsg = null;
+      render();
+    }
+
+    function closeTradeModal() {
+      stateRef.current.tradeModal = false;
+      stateRef.current.editingTrade = null;
       render();
     }
   }, []);
@@ -271,6 +417,17 @@ export default function Dashboard() {
         })
         .catch(() => {});
     }, 60000);
+
+    // Load playbook trades
+    authFetch('/api/playbook')
+      .then((r) => r.json())
+      .then((json) => {
+        if (json.trades) {
+          stateRef.current.playbook = json.trades;
+          render();
+        }
+      })
+      .catch(() => {});
 
     // Load spreads data
     authFetch('/api/spreads')
@@ -364,6 +521,53 @@ interface SpreadsProduct {
   contracts: { ticker: string; label: string; price: number | null }[];
   fetchedAt: string;
 }
+
+// --- Playbook Types ---
+interface PlaybookTrade {
+  id: string; name: string; commodity: string; strategyType: string; direction: string;
+  status: string; grade: string; season: string; summary: string;
+  entryDate: string; plannedExitDate: string; actualExitDate: string;
+  entryPrice: string; exitPrice: string; qty: string;
+  tickSize: string; tickValue: string; currency: string;
+  notes: { text: string; ts: string }[];
+  createdAt: string; updatedAt: string;
+}
+
+const TICK_CONFIGS: Record<string, { tickSize: number; tickValue: number; currency: string }> = {
+  FCPO: { tickSize: 1, tickValue: 25, currency: 'MYR' },
+  NG: { tickSize: 0.001, tickValue: 10, currency: 'USD' },
+  ZS: { tickSize: 0.25, tickValue: 12.50, currency: 'USD' },
+  ZC: { tickSize: 0.25, tickValue: 12.50, currency: 'USD' },
+  ZW: { tickSize: 0.25, tickValue: 12.50, currency: 'USD' },
+  ZL: { tickSize: 0.01, tickValue: 6, currency: 'USD' },
+  KC: { tickSize: 0.05, tickValue: 18.75, currency: 'USD' },
+  SB: { tickSize: 0.01, tickValue: 11.20, currency: 'USD' },
+  HO: { tickSize: 0.0001, tickValue: 4.20, currency: 'USD' },
+  RB: { tickSize: 0.0001, tickValue: 4.20, currency: 'USD' },
+  CT: { tickSize: 0.01, tickValue: 5, currency: 'USD' },
+  CC: { tickSize: 1, tickValue: 10, currency: 'USD' },
+  ZM: { tickSize: 0.10, tickValue: 10, currency: 'USD' },
+  GF: { tickSize: 0.025, tickValue: 12.50, currency: 'USD' },
+  LE: { tickSize: 0.025, tickValue: 10, currency: 'USD' },
+  HE: { tickSize: 0.025, tickValue: 10, currency: 'USD' },
+};
+
+const STRATEGY_TYPES = ['Butterfly', 'Calendar', 'Spread', 'Outright', 'Other'];
+const GRADE_OPTIONS = ['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'C-'];
+const SEASON_OPTIONS = ['Q1', 'Q2', 'Q3', 'Q4', 'Multi-Q', 'Any'];
+const STATUS_OPTIONS = ['Watching', 'Active', 'Closed'];
+
+const GRADE_COLORS: Record<string, string> = {
+  'A+': '#059669', A: '#059669', 'A-': '#10b981',
+  'B+': '#d97706', B: '#d97706', 'B-': '#f59e0b',
+  'C+': '#dc2626', C: '#dc2626', 'C-': '#ef4444',
+};
+
+const STATUS_COLORS: Record<string, { border: string; text: string }> = {
+  Watching: { border: '#334155', text: '#60a5fa' },
+  Active: { border: '#166534', text: '#22c55e' },
+  Closed: { border: '#44403c', text: '#78716c' },
+};
 
 // --- Constants ---
 const PRODUCTS = ['OVERVIEW', 'FCPO', 'ZC', 'ZS', 'ZL', 'ZM', 'ZW', 'NG', 'HO', 'RB', 'KC', 'SB', 'CC', 'CT', 'HE', 'GF', 'LE'];
@@ -743,53 +947,73 @@ function renderSpreadsCard(sp: SpreadsProduct | null, loading: boolean, spPct: S
     </div>`;
 }
 
-function renderOverview(data: DashboardData) {
-  const allPositions: (Position & { product: string })[] = [];
-  VALID_PRODUCTS.forEach((product) => {
-    const pd = data.products[product];
-    if (pd?.positions?.length) {
-      pd.positions.forEach((pos) => allPositions.push({ ...pos, product }));
-    }
-  });
+function renderOverview(data: DashboardData, playbook: PlaybookTrade[], sub: 'playbook' | 'calendar', filter: { commodity: string; status: string; season: string; search: string }, calMonth: number, calYear: number) {
+  const subTabs = `<div class="ov-sub-bar">
+    <div class="ov-sub${sub === 'playbook' ? ' ov-sub-active' : ''}" data-ov-sub="playbook">PLAYBOOK</div>
+    <div class="ov-sub${sub === 'calendar' ? ' ov-sub-active' : ''}" data-ov-sub="calendar">CALENDAR</div>
+  </div>`;
 
-  const summaryCards = VALID_PRODUCTS.map((product) => {
-    const pd = data.products[product];
-    const regClass = pd ? regimeClass(pd.regimeType) : 'regime-neutral';
-    const regime = pd?.regime ? esc(pd.regime) : '—';
-    const ideasCount = pd?.ideas?.length || 0;
-    const posCount = pd?.positions?.length || 0;
-    const updated = pd?.lastUpdated ? esc(pd.lastUpdated) : 'never';
-    return `<div class="card" style="cursor:pointer" data-switch="${product}">
-      <div class="card-header"><span class="card-title">${product}</span><span class="last-updated">${updated}</span></div>
-      <div class="card-body">
-        <div style="margin-bottom:8px"><span class="regime-badge ${regClass}" style="font-size:10px;padding:3px 8px">${regime}</span></div>
-        <div style="display:flex;gap:12px;margin-top:6px">
-          <span style="font-size:11px;color:var(--muted2)">${ideasCount} idea${ideasCount !== 1 ? 's' : ''}</span>
-          <span style="font-size:11px;color:var(--muted2)">${posCount} pos</span>
-        </div>
+  if (sub === 'calendar') {
+    return `${subTabs}<div class="full-row card"><div class="card-body">${renderCalendarView(playbook, calMonth, calYear)}</div></div>`;
+  }
+
+  // Playbook view
+  let filtered = [...playbook];
+  if (filter.commodity) filtered = filtered.filter(t => t.commodity === filter.commodity);
+  if (filter.status) filtered = filtered.filter(t => t.status === filter.status);
+  if (filter.season) filtered = filtered.filter(t => t.season === filter.season);
+  if (filter.search) {
+    const q = filter.search.toLowerCase();
+    filtered = filtered.filter(t => t.name.toLowerCase().includes(q) || t.summary?.toLowerCase().includes(q) || t.commodity.toLowerCase().includes(q));
+  }
+
+  // Sort: Active → Watching → Closed, then by entryDate
+  const statusOrder: Record<string, number> = { Active: 0, Watching: 1, Closed: 2 };
+  filtered.sort((a, b) => (statusOrder[a.status] ?? 1) - (statusOrder[b.status] ?? 1) || (a.entryDate || '').localeCompare(b.entryDate || ''));
+
+  const commodityOpts = ['<option value="">All</option>', ...VALID_PRODUCTS.map(p => `<option value="${p}"${filter.commodity === p ? ' selected' : ''}>${p}</option>`)].join('');
+  const statusFilterOpts = ['<option value="">All</option>', ...STATUS_OPTIONS.map(s => `<option value="${s}"${filter.status === s ? ' selected' : ''}>${s}</option>`)].join('');
+  const seasonFilterOpts = ['<option value="">All</option>', ...SEASON_OPTIONS.map(s => `<option value="${s}"${filter.season === s ? ' selected' : ''}>${s}</option>`)].join('');
+
+  const filterBar = `<div class="pb-filter-bar">
+    <select class="pos-input" id="pb-f-commodity" style="width:100px">${commodityOpts}</select>
+    <select class="pos-input" id="pb-f-status" style="width:100px">${statusFilterOpts}</select>
+    <select class="pos-input" id="pb-f-season" style="width:100px">${seasonFilterOpts}</select>
+    <input class="pos-input" id="pb-f-search" placeholder="Search..." style="width:160px" value="${esc(filter.search)}" />
+    <button class="pos-add-btn" data-add-trade="" style="margin-left:auto">+ ADD TRADE</button>
+  </div>`;
+
+  const cards = filtered.length
+    ? filtered.map(t => renderPlaybookCard(t)).join('')
+    : `<div class="empty-state"><div class="em-icon">◈</div><div>No trades found</div><div class="em-cmd">Click + ADD TRADE to create one</div></div>`;
+
+  const countStr = `<span style="font-size:10px;color:var(--muted);margin-left:8px">${filtered.length} trade${filtered.length !== 1 ? 's' : ''}</span>`;
+
+  return `${subTabs}${filterBar}<div class="full-row">${countStr}${cards}</div>`;
+}
+
+function renderUpcomingTrades(playbook: PlaybookTrade[], product: string) {
+  const trades = playbook.filter(t => t.commodity === product && t.status !== 'Closed');
+  if (!trades.length) return `<div class="empty-state"><div class="em-icon">◈</div><div>No upcoming trades</div><div class="em-cmd">Add from the Playbook</div></div>`;
+  return trades.map(t => {
+    const sc = STATUS_COLORS[t.status] || STATUS_COLORS.Watching;
+    const dirCls = t.direction === 'Long' ? 'dir-long' : t.direction === 'Short' ? 'dir-short' : '';
+    return `<div class="pb-upcoming-row" style="border-left:2px solid ${sc.border}">
+      <div style="display:flex;align-items:center;gap:6px;flex:1">
+        <span class="pb-status" style="color:${sc.text};font-size:9px">${esc(t.status)}</span>
+        ${t.grade ? `<span class="pb-grade" style="color:${GRADE_COLORS[t.grade] || 'var(--muted)'}; font-size:9px">${esc(t.grade)}</span>` : ''}
+        <span style="font-family:var(--mono);font-size:11px;color:var(--text)">${esc(t.name)}</span>
+        <span class="${dirCls}" style="font-size:10px">${esc(t.direction)}</span>
+      </div>
+      <div style="display:flex;gap:12px;font-family:var(--mono);font-size:10px;color:var(--muted)">
+        ${t.entryDate ? `<span>Entry: ${formatDateShort(t.entryDate)}</span>` : ''}
+        ${t.plannedExitDate ? `<span>Exit: ${formatDateShort(t.plannedExitDate)}</span>` : ''}
       </div>
     </div>`;
   }).join('');
-
-  let posHTML: string;
-  if (allPositions.length) {
-    const hdr = `<div class="positions-overview-header"><div class="pos-header">Product</div><div class="pos-header">Instrument</div><div class="pos-header" style="text-align:right">Dir</div><div class="pos-header" style="text-align:right">Qty</div><div class="pos-header" style="text-align:right">Entry</div><div class="pos-header" style="text-align:right">P&L</div></div>`;
-    const rows = allPositions.map((pos) => {
-      const pnlClass = pos.pnl && (pos.pnl.startsWith('-') || parseFloat(pos.pnl) < 0) ? 'pos-pnl-neg' : 'pos-pnl-pos';
-      const dirClass = (pos.direction || '').toLowerCase() === 'short' ? 'pos-dir-short' : 'pos-dir-long';
-      return `<div class="pos-overview-row"><div class="pos-product">${pos.product}</div><div class="pos-instr">${esc(pos.instrument || '')}</div><div class="${dirClass}" style="text-align:right">${esc((pos.direction || '').toUpperCase())}</div><div class="pos-num">${esc(pos.qty || '')}</div><div class="pos-num">${esc(pos.entry || '')}</div><div class="${pnlClass}">${esc(pos.pnl || '--')}</div></div>`;
-    }).join('');
-    posHTML = hdr + rows;
-  } else {
-    posHTML = `<div class="empty-state"><div class="em-icon">◈</div><div>No open positions across any product</div></div>`;
-  }
-
-  return `
-    <div class="full-row"><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px">${summaryCards}</div></div>
-    <div class="full-row card"><div class="card-header"><span class="card-title">ALL OPEN POSITIONS</span></div>${posHTML}</div>`;
 }
 
-function renderProduct(data: DashboardData, product: string, spreads: Record<string, SpreadsProduct> | null, spreadsLoading: boolean) {
+function renderProduct(data: DashboardData, product: string, spreads: Record<string, SpreadsProduct> | null, spreadsLoading: boolean, playbook?: PlaybookTrade[]) {
   const prod = data.products[product] || buildDefault().products[VALID_PRODUCTS[0]];
   const sp = spreads?.[product] ?? null;
 
@@ -813,7 +1037,8 @@ function renderProduct(data: DashboardData, product: string, spreads: Record<str
       <div class="card"><div class="card-header"><span class="card-title">KEY UPCOMING DATES</span></div><div class="card-body">${renderDatesCard(prod)}</div></div>
       <div class="card"><div class="card-header"><span class="card-title">KEY RISKS</span></div><div class="card-body">${renderRisksCard(prod)}</div></div>
       <div class="card"><div class="card-header"><span class="card-title">CURRENT POSITIONS</span><button class="pos-add-btn" data-pos-add="${product}">+ ADD</button></div><div class="card-body"><div id="pos-form-${product}"></div>${renderPositionsCard(prod, product, sp)}</div></div>
-    </div>`;
+    </div>
+    <div class="full-row card"><div class="card-header"><span class="card-title">UPCOMING TRADES</span><button class="pos-add-btn" data-add-trade="${product}">+ ADD</button></div><div class="card-body">${renderUpcomingTrades(playbook || [], product)}</div></div>`;
 }
 
 function renderModal(parseMsg: { ok: boolean; msg: string } | null) {
@@ -910,6 +1135,229 @@ async function removePosition(product: string, index: number, renderFn: () => vo
       }
     }
   } catch { /* ignore */ }
+}
+
+// --- Playbook helpers ---
+function updateTickDefaults() {
+  const commodity = (document.getElementById('tf-commodity') as HTMLSelectElement)?.value;
+  const cfg = TICK_CONFIGS[commodity];
+  if (cfg) {
+    const ts = document.getElementById('tf-tickSize') as HTMLInputElement;
+    const tv = document.getElementById('tf-tickValue') as HTMLInputElement;
+    const cur = document.getElementById('tf-currency') as HTMLInputElement;
+    if (ts && !ts.value) ts.value = String(cfg.tickSize);
+    if (tv && !tv.value) tv.value = String(cfg.tickValue);
+    if (cur && !cur.value) cur.value = cfg.currency;
+  }
+}
+
+function populateTradeForm(trade: PlaybookTrade) {
+  const fields: Record<string, string> = {
+    'tf-name': trade.name, 'tf-commodity': trade.commodity, 'tf-strategy': trade.strategyType,
+    'tf-direction': trade.direction, 'tf-status': trade.status, 'tf-grade': trade.grade,
+    'tf-season': trade.season, 'tf-summary': trade.summary,
+    'tf-entryDate': trade.entryDate, 'tf-exitDate': trade.plannedExitDate, 'tf-actualExitDate': trade.actualExitDate || '',
+    'tf-entryPrice': trade.entryPrice, 'tf-exitPrice': trade.exitPrice, 'tf-qty': trade.qty,
+    'tf-tickSize': trade.tickSize, 'tf-tickValue': trade.tickValue, 'tf-currency': trade.currency,
+  };
+  for (const [id, val] of Object.entries(fields)) {
+    const el = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+    if (el) el.value = val || '';
+  }
+}
+
+async function submitTrade(renderFn: () => void) {
+  const get = (id: string) => (document.getElementById(id) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement)?.value?.trim() || '';
+  const trade: any = {
+    name: get('tf-name'), commodity: get('tf-commodity'), strategyType: get('tf-strategy'),
+    direction: get('tf-direction'), status: get('tf-status'), grade: get('tf-grade'),
+    season: get('tf-season'), summary: get('tf-summary'),
+    entryDate: get('tf-entryDate'), plannedExitDate: get('tf-exitDate'), actualExitDate: get('tf-actualExitDate'),
+    entryPrice: get('tf-entryPrice'), exitPrice: get('tf-exitPrice'), qty: get('tf-qty'),
+    tickSize: get('tf-tickSize'), tickValue: get('tf-tickValue'), currency: get('tf-currency'),
+  };
+  if (!trade.name || !trade.commodity) return;
+
+  const stateRef = (window as any).__stateRef;
+  const editingTrade = stateRef?.current?.editingTrade;
+
+  try {
+    if (editingTrade) {
+      await authFetch('/api/playbook', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'update', id: editingTrade.id, updates: trade }),
+      });
+    } else {
+      await authFetch('/api/playbook', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'add', trade }),
+      });
+    }
+    // Refresh playbook
+    const res = await authFetch('/api/playbook');
+    const json = await res.json();
+    if (json.trades && stateRef) {
+      stateRef.current.playbook = json.trades;
+      stateRef.current.tradeModal = false;
+      stateRef.current.editingTrade = null;
+      renderFn();
+    }
+  } catch { /* ignore */ }
+}
+
+function renderTradeFormModal(editing: PlaybookTrade | null) {
+  const title = editing ? 'EDIT TRADE' : 'ADD TRADE';
+  const commodityOpts = VALID_PRODUCTS.map(p => `<option value="${p}">${p}</option>`).join('');
+  const stratOpts = STRATEGY_TYPES.map(s => `<option value="${s}">${s}</option>`).join('');
+  const dirOpts = ['Long', 'Short', 'Neutral'].map(d => `<option value="${d}">${d}</option>`).join('');
+  const statusOpts = STATUS_OPTIONS.map(s => `<option value="${s}">${s}</option>`).join('');
+  const gradeOpts = ['', ...GRADE_OPTIONS].map(g => `<option value="${g}">${g || '—'}</option>`).join('');
+  const seasonOpts = SEASON_OPTIONS.map(s => `<option value="${s}">${s}</option>`).join('');
+
+  return `<div class="trade-modal-overlay"><div class="modal" style="max-width:620px">
+    <div class="modal-header"><span class="modal-title">${title}</span><button class="modal-close" id="tf-close">✕</button></div>
+    <div class="modal-body" style="max-height:70vh;overflow-y:auto">
+      <div class="tf-grid">
+        <div class="tf-field"><label class="tf-label">Name*</label><input class="pos-input" id="tf-name" placeholder="e.g. May Fly Short" /></div>
+        <div class="tf-field"><label class="tf-label">Commodity*</label><select class="pos-input" id="tf-commodity">${commodityOpts}</select></div>
+      </div>
+      <div class="tf-grid tf-grid-4">
+        <div class="tf-field"><label class="tf-label">Strategy</label><select class="pos-input" id="tf-strategy">${stratOpts}</select></div>
+        <div class="tf-field"><label class="tf-label">Direction</label><select class="pos-input" id="tf-direction">${dirOpts}</select></div>
+        <div class="tf-field"><label class="tf-label">Status</label><select class="pos-input" id="tf-status">${statusOpts}</select></div>
+        <div class="tf-field"><label class="tf-label">Grade</label><select class="pos-input" id="tf-grade">${gradeOpts}</select></div>
+      </div>
+      <div class="tf-grid tf-grid-3">
+        <div class="tf-field"><label class="tf-label">Season</label><select class="pos-input" id="tf-season">${seasonOpts}</select></div>
+        <div class="tf-field"><label class="tf-label">Entry Date</label><input class="pos-input" id="tf-entryDate" type="date" /></div>
+        <div class="tf-field"><label class="tf-label">Planned Exit</label><input class="pos-input" id="tf-exitDate" type="date" /></div>
+      </div>
+      <div class="tf-field"><label class="tf-label">Summary</label><textarea class="pos-input" id="tf-summary" rows="2" placeholder="One-liner description"></textarea></div>
+      <div class="tf-grid tf-grid-3">
+        <div class="tf-field"><label class="tf-label">Entry Price</label><input class="pos-input" id="tf-entryPrice" placeholder="—" /></div>
+        <div class="tf-field"><label class="tf-label">Exit Price</label><input class="pos-input" id="tf-exitPrice" placeholder="—" /></div>
+        <div class="tf-field"><label class="tf-label">Qty</label><input class="pos-input" id="tf-qty" placeholder="1" /></div>
+      </div>
+      <div class="tf-grid tf-grid-3">
+        <div class="tf-field"><label class="tf-label">Tick Size</label><input class="pos-input" id="tf-tickSize" /></div>
+        <div class="tf-field"><label class="tf-label">Tick Value</label><input class="pos-input" id="tf-tickValue" /></div>
+        <div class="tf-field"><label class="tf-label">Currency</label><input class="pos-input" id="tf-currency" /></div>
+      </div>
+      ${editing ? `<div class="tf-field"><label class="tf-label">Actual Exit Date</label><input class="pos-input" id="tf-actualExitDate" type="date" /></div>` : '<input type="hidden" id="tf-actualExitDate" value="" />'}
+      <div class="modal-actions"><button class="btn-cancel" id="tf-cancel">Cancel</button><button class="btn-apply" id="tf-submit">${editing ? 'Save Changes' : 'Add Trade'}</button></div>
+    </div>
+  </div></div>`;
+}
+
+function calculateTradePnl(trade: PlaybookTrade): number | null {
+  const entry = parseFloat(trade.entryPrice);
+  const exit = parseFloat(trade.exitPrice);
+  const qty = parseFloat(trade.qty) || 1;
+  const cfg = TICK_CONFIGS[trade.commodity];
+  const ts = parseFloat(trade.tickSize) || cfg?.tickSize;
+  const tv = parseFloat(trade.tickValue) || cfg?.tickValue;
+  if ([entry, exit, ts, tv].some(v => isNaN(v!) || v === 0)) return null;
+  const diff = trade.direction === 'Short' ? entry - exit : exit - entry;
+  return (diff / ts!) * tv! * qty;
+}
+
+function formatDateShort(dateStr: string) {
+  if (!dateStr) return '';
+  try {
+    const d = new Date(dateStr + 'T00:00:00');
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  } catch { return dateStr; }
+}
+
+function renderPlaybookCard(trade: PlaybookTrade) {
+  const sc = STATUS_COLORS[trade.status] || STATUS_COLORS.Watching;
+  const gc = GRADE_COLORS[trade.grade] || 'var(--muted)';
+  const dirCls = trade.direction === 'Long' ? 'dir-long' : trade.direction === 'Short' ? 'dir-short' : '';
+  const pnl = trade.status === 'Closed' ? calculateTradePnl(trade) : null;
+  const pnlStr = pnl !== null ? `<span class="${pnl >= 0 ? 'pos-pnl-pos' : 'pos-pnl-neg'}">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} ${trade.currency || TICK_CONFIGS[trade.commodity]?.currency || ''}</span>` : '';
+
+  const notesHtml = (trade.notes || []).map(n => {
+    const d = new Date(n.ts);
+    const ts = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) + ' ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    return `<div class="pb-note"><span class="pb-note-ts">${ts}</span><span>${esc(n.text)}</span></div>`;
+  }).join('');
+
+  return `<div class="pb-card" style="border-left:3px solid ${sc.border}">
+    <div class="pb-card-top" data-toggle-card="${trade.id}" style="cursor:pointer">
+      <div class="pb-card-left">
+        <span class="pb-status" style="color:${sc.text}">${esc(trade.status)}</span>
+        ${trade.grade ? `<span class="pb-grade" style="color:${gc}">${esc(trade.grade)}</span>` : ''}
+        <span class="pb-commodity">${esc(trade.commodity)}</span>
+        <span class="pb-strategy">${esc(trade.strategyType)}</span>
+        <span class="${dirCls}" style="font-size:11px">${esc(trade.direction)}</span>
+      </div>
+      <div class="pb-card-actions">
+        <button class="pos-add-btn" data-edit-trade="${trade.id}">Edit</button>
+        <button class="pos-close-btn" data-delete-trade="${trade.id}">✕</button>
+      </div>
+    </div>
+    <div class="pb-card-name">${esc(trade.name)}</div>
+    ${trade.summary ? `<div class="pb-card-summary">${esc(trade.summary)}</div>` : ''}
+    <div class="pb-card-dates">
+      ${trade.entryDate ? `<span>Entry: ${formatDateShort(trade.entryDate)}</span>` : ''}
+      ${trade.plannedExitDate ? `<span>Exit: ${formatDateShort(trade.plannedExitDate)}</span>` : ''}
+      ${pnlStr ? `<span>P&L: ${pnlStr}</span>` : ''}
+    </div>
+    <div id="trade-detail-${trade.id}" style="display:none">
+      ${notesHtml ? `<div class="pb-notes-section"><div class="section-label">Notes</div>${notesHtml}</div>` : ''}
+      <div class="pb-add-note">
+        <input class="pos-input" id="note-input-${trade.id}" placeholder="Add a note..." style="flex:1" />
+        <button class="pos-add-btn" data-add-note="${trade.id}" style="flex-shrink:0">Add</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderCalendarView(trades: PlaybookTrade[], month: number, year: number) {
+  const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const firstDay = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const today = new Date();
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+
+  const activeTrades = trades.filter(t => t.status !== 'Closed');
+
+  let cells = '';
+  // Empty cells for days before month starts
+  for (let i = 0; i < firstDay; i++) cells += '<div class="cal-cell cal-empty"></div>';
+
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const isToday = dateStr === todayStr;
+    const dayTrades: string[] = [];
+
+    for (const t of activeTrades) {
+      if (t.entryDate === dateStr) dayTrades.push(`<div class="cal-trade cal-entry">${esc(t.commodity)} ${esc(t.name)}</div>`);
+      if (t.plannedExitDate === dateStr) dayTrades.push(`<div class="cal-trade cal-exit">${esc(t.commodity)} ${esc(t.name)}</div>`);
+      // Show as active range
+      if (t.entryDate && t.plannedExitDate && t.entryDate <= dateStr && t.plannedExitDate >= dateStr && t.entryDate !== dateStr && t.plannedExitDate !== dateStr) {
+        dayTrades.push(`<div class="cal-trade cal-active">${esc(t.commodity)}</div>`);
+      }
+    }
+
+    cells += `<div class="cal-cell${isToday ? ' cal-today' : ''}"><div class="cal-day">${d}</div>${dayTrades.join('')}</div>`;
+  }
+
+  return `
+    <div class="cal-nav">
+      <button class="pos-add-btn" id="cal-prev">◀</button>
+      <span class="cal-title">${MONTH_NAMES[month]} ${year}</span>
+      <button class="pos-add-btn" id="cal-next">▶</button>
+    </div>
+    <div class="cal-header">
+      <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+    </div>
+    <div class="cal-grid">${cells}</div>
+    <div class="cal-legend">
+      <span class="cal-leg"><span class="cal-dot cal-dot-entry"></span>Entry</span>
+      <span class="cal-leg"><span class="cal-dot cal-dot-exit"></span>Exit</span>
+      <span class="cal-leg"><span class="cal-dot cal-dot-active"></span>Active range</span>
+    </div>`;
 }
 
 // --- Styles ---
@@ -1084,6 +1532,56 @@ body { background: var(--bg); color: var(--text); font-family: var(--sans); font
 .rb-dir { font-size: 9px; margin-left: 4px; vertical-align: middle; }
 .rb-dir-long { color: var(--green); }
 .rb-dir-short { color: var(--red); }
+/* Playbook styles */
+.ov-sub-bar { display: flex; gap: 0; margin-bottom: 12px; border-bottom: 1px solid var(--border); }
+.ov-sub { padding: 8px 16px; font-family: var(--mono); font-size: 11px; font-weight: 500; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; letter-spacing: 0.06em; }
+.ov-sub:hover { color: var(--text); }
+.ov-sub-active { color: var(--accent); border-bottom-color: var(--accent); }
+.pb-filter-bar { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
+.pb-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 5px; padding: 10px 12px; margin-bottom: 8px; }
+.pb-card-top { display: flex; align-items: center; justify-content: space-between; }
+.pb-card-left { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pb-card-actions { display: flex; gap: 4px; }
+.pb-status { font-family: var(--mono); font-size: 10px; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; }
+.pb-grade { font-family: var(--mono); font-size: 10px; font-weight: 600; }
+.pb-commodity { font-family: var(--mono); font-size: 10px; color: var(--accent); background: rgba(56,189,248,0.08); padding: 1px 6px; border-radius: 2px; }
+.pb-strategy { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+.pb-card-name { font-family: var(--mono); font-size: 12px; color: var(--text); font-weight: 500; margin: 6px 0 2px; }
+.pb-card-summary { font-size: 11px; color: var(--muted2); line-height: 1.4; margin-bottom: 4px; }
+.pb-card-dates { display: flex; gap: 16px; font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 4px; }
+.pb-notes-section { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.pb-note { font-size: 11px; color: var(--muted2); padding: 3px 0; display: flex; gap: 8px; }
+.pb-note-ts { color: var(--muted); font-family: var(--mono); font-size: 10px; flex-shrink: 0; }
+.pb-add-note { display: flex; gap: 6px; margin-top: 8px; }
+.pb-upcoming-row { display: flex; align-items: center; justify-content: space-between; padding: 7px 10px; margin-bottom: 4px; border-radius: 3px; background: var(--bg3); }
+/* Trade form */
+.trade-modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.75); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 16px; }
+.tf-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+.tf-grid-3 { grid-template-columns: 1fr 1fr 1fr; }
+.tf-grid-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
+.tf-field { display: flex; flex-direction: column; gap: 3px; }
+.tf-label { font-family: var(--mono); font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+/* Calendar view */
+.cal-nav { display: flex; align-items: center; justify-content: center; gap: 16px; margin-bottom: 12px; }
+.cal-title { font-family: var(--mono); font-size: 14px; color: var(--text); font-weight: 500; min-width: 160px; text-align: center; }
+.cal-header { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; margin-bottom: 2px; }
+.cal-header div { font-family: var(--mono); font-size: 10px; color: var(--muted); text-align: center; padding: 4px; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; }
+.cal-cell { background: var(--bg3); border: 1px solid var(--border); min-height: 80px; padding: 4px; border-radius: 3px; }
+.cal-empty { background: transparent; border-color: transparent; }
+.cal-today { border-color: var(--accent); }
+.cal-day { font-family: var(--mono); font-size: 11px; color: var(--muted2); margin-bottom: 2px; }
+.cal-today .cal-day { color: var(--accent); font-weight: 500; }
+.cal-trade { font-family: var(--mono); font-size: 8px; padding: 2px 3px; border-radius: 2px; margin-bottom: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cal-entry { background: rgba(34,197,94,0.15); color: var(--green); border-left: 2px solid var(--green); }
+.cal-exit { background: rgba(239,68,68,0.15); color: var(--red); border-left: 2px solid var(--red); }
+.cal-active { background: rgba(56,189,248,0.08); color: var(--accent); }
+.cal-legend { display: flex; gap: 16px; margin-top: 8px; font-family: var(--mono); font-size: 10px; color: var(--muted); justify-content: center; }
+.cal-leg { display: flex; align-items: center; gap: 4px; }
+.cal-dot { width: 8px; height: 8px; border-radius: 2px; }
+.cal-dot-entry { background: rgba(34,197,94,0.4); border-left: 2px solid var(--green); }
+.cal-dot-exit { background: rgba(239,68,68,0.4); border-left: 2px solid var(--red); }
+.cal-dot-active { background: rgba(56,189,248,0.15); }
 .rb-tooltip { position: absolute; z-index: 50; background: rgba(20,22,32,0.97); border: 1px solid rgba(60,65,85,0.8); border-radius: 5px; padding: 8px 12px; font-family: var(--mono); font-size: 10px; pointer-events: none; min-width: 120px; box-shadow: 0 4px 16px rgba(0,0,0,0.5); }
 .rb-tt-row { display: flex; justify-content: space-between; gap: 16px; padding: 1px 0; color: var(--muted2); }
 .rb-tt-divider { height: 1px; background: var(--border); margin: 3px 0; }
