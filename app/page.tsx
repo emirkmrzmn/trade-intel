@@ -25,15 +25,17 @@ export default function Dashboard() {
     modal: boolean;
     tradeModal: boolean;
     editingTrade: PlaybookTrade | null;
-    overviewSub: 'playbook' | 'calendar';
+    overviewSub: 'playbook' | 'calendar' | 'archives';
     calMonth: number;
     calYear: number;
-    pbFilter: { commodity: string; status: string; season: string; search: string };
+    pbFilter: { commodity: string; search: string };
     parseMsg: { ok: boolean; msg: string; product?: string } | null;
     data: DashboardData;
     spreads: Record<string, SpreadsProduct> | null;
     spreadsLoading: boolean;
     playbook: PlaybookTrade[];
+    archive: ArchivedTrade[];
+    archiveFilter: { commodity: string; month: string };
   }>({
     tab: 'OVERVIEW',
     modal: false,
@@ -42,12 +44,14 @@ export default function Dashboard() {
     overviewSub: 'playbook',
     calMonth: new Date().getMonth(),
     calYear: new Date().getFullYear(),
-    pbFilter: { commodity: '', status: '', season: '', search: '' },
+    pbFilter: { commodity: '', search: '' },
     parseMsg: null,
     data: buildDefault(),
     spreads: null,
     spreadsLoading: false,
     playbook: [],
+    archive: [],
+    archiveFilter: { commodity: '', month: '' },
   });
 
   // Expose stateRef for trade form submission
@@ -87,13 +91,31 @@ export default function Dashboard() {
 
   const render = useCallback(() => {
     if (!appRef.current) return;
+
+    // Preserve any open position form so auto-refresh doesn't wipe user input
+    let openPosForm: { product: string; instrument: string; direction: string; qty: string; entry: string } | null = null;
+    const openFormEl = appRef.current.querySelector('.pos-form');
+    if (openFormEl) {
+      const container = openFormEl.closest('[id^="pos-form-"]');
+      if (container) {
+        const product = container.id.replace('pos-form-', '');
+        openPosForm = {
+          product,
+          instrument: (document.getElementById('pos-instrument') as HTMLInputElement)?.value || '',
+          direction: (document.getElementById('pos-direction') as HTMLSelectElement)?.value || 'Long',
+          qty: (document.getElementById('pos-qty') as HTMLInputElement)?.value || '',
+          entry: (document.getElementById('pos-entry') as HTMLInputElement)?.value || '',
+        };
+      }
+    }
+
     const { tab, modal, parseMsg, data } = stateRef.current;
     const tabs = PRODUCTS.map(
       (p) =>
         `<div class="tab${tab === p ? ' active' : ''}" data-tab="${p}">${PRODUCT_LABELS[p] || p}</div>`
     ).join('');
-    const { spreads, spreadsLoading, playbook, overviewSub, calMonth, calYear, pbFilter, tradeModal, editingTrade } = stateRef.current;
-    const content = tab === 'OVERVIEW' ? renderOverview(data, playbook, overviewSub, pbFilter, calMonth, calYear) : renderProduct(data, tab, spreads, spreadsLoading, playbook);
+    const { spreads, spreadsLoading, playbook, overviewSub, calMonth, calYear, pbFilter, tradeModal, editingTrade, archive, archiveFilter } = stateRef.current;
+    const content = tab === 'OVERVIEW' ? renderOverview(data, playbook, overviewSub, pbFilter, calMonth, calYear, archive, archiveFilter) : renderProduct(data, tab, spreads, spreadsLoading, playbook);
     const modalHTML = modal ? renderModal(parseMsg) : '';
     const tradeModalHTML = tradeModal ? renderTradeFormModal(editingTrade) : '';
 
@@ -139,6 +161,25 @@ export default function Dashboard() {
     });
     document.getElementById('modal-apply')?.addEventListener('click', () => applyPush());
 
+    // Helper to inject position form into a container
+    function injectPosForm(product: string, formEl: HTMLElement, values?: { instrument: string; direction: string; qty: string; entry: string }) {
+      formEl.innerHTML = `
+        <div class="pos-form">
+          <input class="pos-input" id="pos-instrument" placeholder="Instrument (e.g. May-Jun26)" value="${values?.instrument || ''}" />
+          <div class="pos-form-row">
+            <select class="pos-input pos-select" id="pos-direction"><option value="Long"${values?.direction === 'Short' ? '' : ' selected'}>Long</option><option value="Short"${values?.direction === 'Short' ? ' selected' : ''}>Short</option></select>
+            <input class="pos-input" id="pos-qty" placeholder="Qty" style="width:60px" value="${values?.qty || ''}" />
+            <input class="pos-input" id="pos-entry" placeholder="Entry" style="width:80px" value="${values?.entry || ''}" />
+          </div>
+          <div style="display:flex;gap:6px;margin-top:6px">
+            <button class="btn-apply" id="pos-submit" style="font-size:11px;padding:5px 12px">Add Position</button>
+            <button class="btn-cancel" id="pos-cancel" style="font-size:11px;padding:5px 12px">Cancel</button>
+          </div>
+        </div>`;
+      document.getElementById('pos-submit')?.addEventListener('click', () => submitPosition(product, render));
+      document.getElementById('pos-cancel')?.addEventListener('click', () => { formEl.innerHTML = ''; });
+    }
+
     // Position add buttons
     appRef.current.querySelectorAll('[data-pos-add]').forEach((el) => {
       el.addEventListener('click', () => {
@@ -146,24 +187,18 @@ export default function Dashboard() {
         const formEl = document.getElementById(`pos-form-${product}`);
         if (!formEl) return;
         if (formEl.innerHTML) { formEl.innerHTML = ''; return; } // toggle off
-        formEl.innerHTML = `
-          <div class="pos-form">
-            <input class="pos-input" id="pos-instrument" placeholder="Instrument (e.g. May-Jun26)" />
-            <div class="pos-form-row">
-              <select class="pos-input pos-select" id="pos-direction"><option value="Long">Long</option><option value="Short">Short</option></select>
-              <input class="pos-input" id="pos-qty" placeholder="Qty" style="width:60px" />
-              <input class="pos-input" id="pos-entry" placeholder="Entry" style="width:80px" />
-            </div>
-            <div style="display:flex;gap:6px;margin-top:6px">
-              <button class="btn-apply" id="pos-submit" style="font-size:11px;padding:5px 12px">Add Position</button>
-              <button class="btn-cancel" id="pos-cancel" style="font-size:11px;padding:5px 12px">Cancel</button>
-            </div>
-          </div>`;
+        injectPosForm(product, formEl);
         setTimeout(() => document.getElementById('pos-instrument')?.focus(), 50);
-        document.getElementById('pos-submit')?.addEventListener('click', () => submitPosition(product, render));
-        document.getElementById('pos-cancel')?.addEventListener('click', () => { formEl.innerHTML = ''; });
       });
     });
+
+    // Restore position form if it was open before re-render
+    if (openPosForm) {
+      const formEl = document.getElementById(`pos-form-${openPosForm.product}`);
+      if (formEl) {
+        injectPosForm(openPosForm.product, formEl, openPosForm);
+      }
+    }
 
     // Position close buttons
     appRef.current.querySelectorAll('[data-pos-close]').forEach((el) => {
@@ -223,7 +258,7 @@ export default function Dashboard() {
     // Overview sub-tab toggles
     appRef.current.querySelectorAll('[data-ov-sub]').forEach((el) => {
       el.addEventListener('click', () => {
-        stateRef.current.overviewSub = el.getAttribute('data-ov-sub') as 'playbook' | 'calendar';
+        stateRef.current.overviewSub = el.getAttribute('data-ov-sub') as 'playbook' | 'calendar' | 'archives';
         render();
       });
     });
@@ -241,7 +276,7 @@ export default function Dashboard() {
     });
 
     // Playbook filter changes
-    ['pb-f-commodity', 'pb-f-status', 'pb-f-season'].forEach((id) => {
+    ['pb-f-commodity'].forEach((id) => {
       const el = document.getElementById(id) as HTMLSelectElement;
       el?.addEventListener('change', () => {
         const key = id.replace('pb-f-', '');
@@ -286,7 +321,7 @@ export default function Dashboard() {
       });
     });
 
-    // Delete trade buttons
+    // Delete trade buttons (archives the trade)
     appRef.current.querySelectorAll('[data-delete-trade]').forEach((el) => {
       el.addEventListener('click', async () => {
         const id = el.getAttribute('data-delete-trade')!;
@@ -297,6 +332,10 @@ export default function Dashboard() {
             body: JSON.stringify({ action: 'delete', id }),
           });
           stateRef.current.playbook = stateRef.current.playbook.filter(t => t.id !== id);
+          // Refresh archive from server
+          const res = await authFetch('/api/playbook');
+          const json = await res.json();
+          if (json.archive) stateRef.current.archive = json.archive;
           render();
         } catch { /* ignore */ }
       });
@@ -339,6 +378,63 @@ export default function Dashboard() {
       el.addEventListener('click', () => {
         const detailEl = document.getElementById(`trade-detail-${el.getAttribute('data-toggle-card')}`);
         if (detailEl) detailEl.style.display = detailEl.style.display === 'none' ? 'block' : 'none';
+      });
+    });
+
+    // Archive filter changes
+    ['arch-f-commodity', 'arch-f-month'].forEach((id) => {
+      const el = document.getElementById(id) as HTMLSelectElement;
+      el?.addEventListener('change', () => {
+        const key = id === 'arch-f-commodity' ? 'commodity' : 'month';
+        (stateRef.current.archiveFilter as any)[key] = el.value;
+        render();
+      });
+    });
+
+    // Toggle archive card details
+    appRef.current.querySelectorAll('[data-toggle-archive]').forEach((el) => {
+      el.addEventListener('click', () => {
+        const detailEl = document.getElementById(`archive-detail-${el.getAttribute('data-toggle-archive')}`);
+        if (detailEl) detailEl.style.display = detailEl.style.display === 'none' ? 'block' : 'none';
+      });
+    });
+
+    // Add archive note
+    appRef.current.querySelectorAll('[data-add-archive-note]').forEach((el) => {
+      el.addEventListener('click', async () => {
+        const id = el.getAttribute('data-add-archive-note')!;
+        const input = document.getElementById(`arch-note-input-${id}`) as HTMLInputElement;
+        const text = input?.value.trim();
+        if (!text) return;
+        try {
+          await authFetch('/api/playbook', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'addArchiveNote', id, text }),
+          });
+          const trade = stateRef.current.archive.find(t => t.id === id);
+          if (trade) {
+            if (!trade.notes) trade.notes = [];
+            trade.notes.push({ text, ts: new Date().toISOString() });
+          }
+          render();
+        } catch { /* ignore */ }
+      });
+    });
+
+    // Delete archive permanently
+    appRef.current.querySelectorAll('[data-delete-archive]').forEach((el) => {
+      el.addEventListener('click', async () => {
+        const id = el.getAttribute('data-delete-archive')!;
+        try {
+          await authFetch('/api/playbook', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'deleteArchive', id }),
+          });
+          stateRef.current.archive = stateRef.current.archive.filter(t => t.id !== id);
+          render();
+        } catch { /* ignore */ }
       });
     });
 
@@ -424,6 +520,7 @@ export default function Dashboard() {
       .then((json) => {
         if (json.trades) {
           stateRef.current.playbook = json.trades;
+          if (json.archive) stateRef.current.archive = json.archive;
           render();
         }
       })
@@ -492,6 +589,13 @@ export default function Dashboard() {
 // --- Types ---
 interface Percentile { label: string; value: number }
 interface Idea { tier: string; contract: string; direction: string; entry_date: string; entry_price: string; exit_date: string; exit_price: string; rationale: string }
+interface ArchivedTrade {
+  id: string; name: string; commodity: string; strategyType: string; direction: string;
+  grade: string; summary: string; entryDate: string; plannedExitDate: string;
+  seasonalDate: string; // DD/MM format for seasonal reference
+  notes: { text: string; ts: string }[];
+  archivedAt: string;
+}
 interface DateEntry { date: string; label: string; note: string; urgency: string }
 interface Position { instrument: string; direction: string; qty: string; entry: string; pnl: string }
 interface SpreadPctEntry { min: number; p5: number; p10: number; p25: number; p50: number; p75: number; p90: number; p95: number; max: number }
@@ -525,12 +629,14 @@ interface SpreadsProduct {
 // --- Playbook Types ---
 interface PlaybookTrade {
   id: string; name: string; commodity: string; strategyType: string; direction: string;
-  status: string; grade: string; season: string; summary: string;
-  entryDate: string; plannedExitDate: string; actualExitDate: string;
-  entryPrice: string; exitPrice: string; qty: string;
-  tickSize: string; tickValue: string; currency: string;
+  grade: string; summary: string;
+  entryDate: string; plannedExitDate: string;
   notes: { text: string; ts: string }[];
   createdAt: string; updatedAt: string;
+  // legacy fields kept for backward compat with existing data
+  status?: string; season?: string; actualExitDate?: string;
+  entryPrice?: string; exitPrice?: string; qty?: string;
+  tickSize?: string; tickValue?: string; currency?: string;
 }
 
 const TICK_CONFIGS: Record<string, { tickSize: number; tickValue: number; currency: string }> = {
@@ -554,19 +660,10 @@ const TICK_CONFIGS: Record<string, { tickSize: number; tickValue: number; curren
 
 const STRATEGY_TYPES = ['Butterfly', 'Calendar', 'Spread', 'Outright', 'Other'];
 const GRADE_OPTIONS = ['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'C-'];
-const SEASON_OPTIONS = ['Q1', 'Q2', 'Q3', 'Q4', 'Multi-Q', 'Any'];
-const STATUS_OPTIONS = ['Watching', 'Active', 'Closed'];
-
 const GRADE_COLORS: Record<string, string> = {
   'A+': '#059669', A: '#059669', 'A-': '#10b981',
   'B+': '#d97706', B: '#d97706', 'B-': '#f59e0b',
   'C+': '#dc2626', C: '#dc2626', 'C-': '#ef4444',
-};
-
-const STATUS_COLORS: Record<string, { border: string; text: string }> = {
-  Watching: { border: '#334155', text: '#60a5fa' },
-  Active: { border: '#166534', text: '#22c55e' },
-  Closed: { border: '#44403c', text: '#78716c' },
 };
 
 // --- Constants ---
@@ -947,38 +1044,36 @@ function renderSpreadsCard(sp: SpreadsProduct | null, loading: boolean, spPct: S
     </div>`;
 }
 
-function renderOverview(data: DashboardData, playbook: PlaybookTrade[], sub: 'playbook' | 'calendar', filter: { commodity: string; status: string; season: string; search: string }, calMonth: number, calYear: number) {
+function renderOverview(data: DashboardData, playbook: PlaybookTrade[], sub: 'playbook' | 'calendar' | 'archives', filter: { commodity: string; search: string }, calMonth: number, calYear: number, archive: ArchivedTrade[], archiveFilter: { commodity: string; month: string }) {
   const subTabs = `<div class="ov-sub-bar">
     <div class="ov-sub${sub === 'playbook' ? ' ov-sub-active' : ''}" data-ov-sub="playbook">PLAYBOOK</div>
     <div class="ov-sub${sub === 'calendar' ? ' ov-sub-active' : ''}" data-ov-sub="calendar">CALENDAR</div>
+    <div class="ov-sub${sub === 'archives' ? ' ov-sub-active' : ''}" data-ov-sub="archives">ARCHIVES</div>
   </div>`;
 
   if (sub === 'calendar') {
     return `${subTabs}<div class="full-row card"><div class="card-body">${renderCalendarView(playbook, calMonth, calYear)}</div></div>`;
   }
 
+  if (sub === 'archives') {
+    return `${subTabs}${renderArchiveView(archive, archiveFilter)}`;
+  }
+
   // Playbook view
   let filtered = [...playbook];
   if (filter.commodity) filtered = filtered.filter(t => t.commodity === filter.commodity);
-  if (filter.status) filtered = filtered.filter(t => t.status === filter.status);
-  if (filter.season) filtered = filtered.filter(t => t.season === filter.season);
   if (filter.search) {
     const q = filter.search.toLowerCase();
     filtered = filtered.filter(t => t.name.toLowerCase().includes(q) || t.summary?.toLowerCase().includes(q) || t.commodity.toLowerCase().includes(q));
   }
 
-  // Sort: Active → Watching → Closed, then by entryDate
-  const statusOrder: Record<string, number> = { Active: 0, Watching: 1, Closed: 2 };
-  filtered.sort((a, b) => (statusOrder[a.status] ?? 1) - (statusOrder[b.status] ?? 1) || (a.entryDate || '').localeCompare(b.entryDate || ''));
+  // Sort by entryDate
+  filtered.sort((a, b) => (a.entryDate || '').localeCompare(b.entryDate || ''));
 
   const commodityOpts = ['<option value="">All</option>', ...VALID_PRODUCTS.map(p => `<option value="${p}"${filter.commodity === p ? ' selected' : ''}>${p}</option>`)].join('');
-  const statusFilterOpts = ['<option value="">All</option>', ...STATUS_OPTIONS.map(s => `<option value="${s}"${filter.status === s ? ' selected' : ''}>${s}</option>`)].join('');
-  const seasonFilterOpts = ['<option value="">All</option>', ...SEASON_OPTIONS.map(s => `<option value="${s}"${filter.season === s ? ' selected' : ''}>${s}</option>`)].join('');
 
   const filterBar = `<div class="pb-filter-bar">
     <select class="pos-input" id="pb-f-commodity" style="width:100px">${commodityOpts}</select>
-    <select class="pos-input" id="pb-f-status" style="width:100px">${statusFilterOpts}</select>
-    <select class="pos-input" id="pb-f-season" style="width:100px">${seasonFilterOpts}</select>
     <input class="pos-input" id="pb-f-search" placeholder="Search..." style="width:160px" value="${esc(filter.search)}" />
     <button class="pos-add-btn" data-add-trade="" style="margin-left:auto">+ ADD TRADE</button>
   </div>`;
@@ -993,14 +1088,12 @@ function renderOverview(data: DashboardData, playbook: PlaybookTrade[], sub: 'pl
 }
 
 function renderUpcomingTrades(playbook: PlaybookTrade[], product: string) {
-  const trades = playbook.filter(t => t.commodity === product && t.status !== 'Closed');
+  const trades = playbook.filter(t => t.commodity === product);
   if (!trades.length) return `<div class="empty-state"><div class="em-icon">◈</div><div>No upcoming trades</div><div class="em-cmd">Add from the Playbook</div></div>`;
   return trades.map(t => {
-    const sc = STATUS_COLORS[t.status] || STATUS_COLORS.Watching;
     const dirCls = t.direction === 'Long' ? 'dir-long' : t.direction === 'Short' ? 'dir-short' : '';
-    return `<div class="pb-upcoming-row" style="border-left:2px solid ${sc.border}">
+    return `<div class="pb-upcoming-row" style="border-left:2px solid var(--border)">
       <div style="display:flex;align-items:center;gap:6px;flex:1">
-        <span class="pb-status" style="color:${sc.text};font-size:9px">${esc(t.status)}</span>
         ${t.grade ? `<span class="pb-grade" style="color:${GRADE_COLORS[t.grade] || 'var(--muted)'}; font-size:9px">${esc(t.grade)}</span>` : ''}
         <span style="font-family:var(--mono);font-size:11px;color:var(--text)">${esc(t.name)}</span>
         <span class="${dirCls}" style="font-size:10px">${esc(t.direction)}</span>
@@ -1154,11 +1247,8 @@ function updateTickDefaults() {
 function populateTradeForm(trade: PlaybookTrade) {
   const fields: Record<string, string> = {
     'tf-name': trade.name, 'tf-commodity': trade.commodity, 'tf-strategy': trade.strategyType,
-    'tf-direction': trade.direction, 'tf-status': trade.status, 'tf-grade': trade.grade,
-    'tf-season': trade.season, 'tf-summary': trade.summary,
-    'tf-entryDate': trade.entryDate, 'tf-exitDate': trade.plannedExitDate, 'tf-actualExitDate': trade.actualExitDate || '',
-    'tf-entryPrice': trade.entryPrice, 'tf-exitPrice': trade.exitPrice, 'tf-qty': trade.qty,
-    'tf-tickSize': trade.tickSize, 'tf-tickValue': trade.tickValue, 'tf-currency': trade.currency,
+    'tf-direction': trade.direction, 'tf-grade': trade.grade, 'tf-summary': trade.summary,
+    'tf-entryDate': trade.entryDate, 'tf-exitDate': trade.plannedExitDate,
   };
   for (const [id, val] of Object.entries(fields)) {
     const el = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
@@ -1170,11 +1260,8 @@ async function submitTrade(renderFn: () => void) {
   const get = (id: string) => (document.getElementById(id) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement)?.value?.trim() || '';
   const trade: any = {
     name: get('tf-name'), commodity: get('tf-commodity'), strategyType: get('tf-strategy'),
-    direction: get('tf-direction'), status: get('tf-status'), grade: get('tf-grade'),
-    season: get('tf-season'), summary: get('tf-summary'),
-    entryDate: get('tf-entryDate'), plannedExitDate: get('tf-exitDate'), actualExitDate: get('tf-actualExitDate'),
-    entryPrice: get('tf-entryPrice'), exitPrice: get('tf-exitPrice'), qty: get('tf-qty'),
-    tickSize: get('tf-tickSize'), tickValue: get('tf-tickValue'), currency: get('tf-currency'),
+    direction: get('tf-direction'), grade: get('tf-grade'), summary: get('tf-summary'),
+    entryDate: get('tf-entryDate'), plannedExitDate: get('tf-exitDate'),
   };
   if (!trade.name || !trade.commodity) return;
 
@@ -1198,6 +1285,7 @@ async function submitTrade(renderFn: () => void) {
     const json = await res.json();
     if (json.trades && stateRef) {
       stateRef.current.playbook = json.trades;
+      if (json.archive) stateRef.current.archive = json.archive;
       stateRef.current.tradeModal = false;
       stateRef.current.editingTrade = null;
       renderFn();
@@ -1210,9 +1298,7 @@ function renderTradeFormModal(editing: PlaybookTrade | null) {
   const commodityOpts = VALID_PRODUCTS.map(p => `<option value="${p}">${p}</option>`).join('');
   const stratOpts = STRATEGY_TYPES.map(s => `<option value="${s}">${s}</option>`).join('');
   const dirOpts = ['Long', 'Short', 'Neutral'].map(d => `<option value="${d}">${d}</option>`).join('');
-  const statusOpts = STATUS_OPTIONS.map(s => `<option value="${s}">${s}</option>`).join('');
   const gradeOpts = ['', ...GRADE_OPTIONS].map(g => `<option value="${g}">${g || '—'}</option>`).join('');
-  const seasonOpts = SEASON_OPTIONS.map(s => `<option value="${s}">${s}</option>`).join('');
 
   return `<div class="trade-modal-overlay"><div class="modal" style="max-width:620px">
     <div class="modal-header"><span class="modal-title">${title}</span><button class="modal-close" id="tf-close">✕</button></div>
@@ -1224,41 +1310,16 @@ function renderTradeFormModal(editing: PlaybookTrade | null) {
       <div class="tf-grid tf-grid-4">
         <div class="tf-field"><label class="tf-label">Strategy</label><select class="pos-input" id="tf-strategy">${stratOpts}</select></div>
         <div class="tf-field"><label class="tf-label">Direction</label><select class="pos-input" id="tf-direction">${dirOpts}</select></div>
-        <div class="tf-field"><label class="tf-label">Status</label><select class="pos-input" id="tf-status">${statusOpts}</select></div>
         <div class="tf-field"><label class="tf-label">Grade</label><select class="pos-input" id="tf-grade">${gradeOpts}</select></div>
-      </div>
-      <div class="tf-grid tf-grid-3">
-        <div class="tf-field"><label class="tf-label">Season</label><select class="pos-input" id="tf-season">${seasonOpts}</select></div>
         <div class="tf-field"><label class="tf-label">Entry Date</label><input class="pos-input" id="tf-entryDate" type="date" /></div>
+      </div>
+      <div class="tf-grid">
         <div class="tf-field"><label class="tf-label">Planned Exit</label><input class="pos-input" id="tf-exitDate" type="date" /></div>
+        <div class="tf-field"><label class="tf-label">Summary</label><textarea class="pos-input" id="tf-summary" rows="2" placeholder="One-liner description"></textarea></div>
       </div>
-      <div class="tf-field"><label class="tf-label">Summary</label><textarea class="pos-input" id="tf-summary" rows="2" placeholder="One-liner description"></textarea></div>
-      <div class="tf-grid tf-grid-3">
-        <div class="tf-field"><label class="tf-label">Entry Price</label><input class="pos-input" id="tf-entryPrice" placeholder="—" /></div>
-        <div class="tf-field"><label class="tf-label">Exit Price</label><input class="pos-input" id="tf-exitPrice" placeholder="—" /></div>
-        <div class="tf-field"><label class="tf-label">Qty</label><input class="pos-input" id="tf-qty" placeholder="1" /></div>
-      </div>
-      <div class="tf-grid tf-grid-3">
-        <div class="tf-field"><label class="tf-label">Tick Size</label><input class="pos-input" id="tf-tickSize" /></div>
-        <div class="tf-field"><label class="tf-label">Tick Value</label><input class="pos-input" id="tf-tickValue" /></div>
-        <div class="tf-field"><label class="tf-label">Currency</label><input class="pos-input" id="tf-currency" /></div>
-      </div>
-      ${editing ? `<div class="tf-field"><label class="tf-label">Actual Exit Date</label><input class="pos-input" id="tf-actualExitDate" type="date" /></div>` : '<input type="hidden" id="tf-actualExitDate" value="" />'}
       <div class="modal-actions"><button class="btn-cancel" id="tf-cancel">Cancel</button><button class="btn-apply" id="tf-submit">${editing ? 'Save Changes' : 'Add Trade'}</button></div>
     </div>
   </div></div>`;
-}
-
-function calculateTradePnl(trade: PlaybookTrade): number | null {
-  const entry = parseFloat(trade.entryPrice);
-  const exit = parseFloat(trade.exitPrice);
-  const qty = parseFloat(trade.qty) || 1;
-  const cfg = TICK_CONFIGS[trade.commodity];
-  const ts = parseFloat(trade.tickSize) || cfg?.tickSize;
-  const tv = parseFloat(trade.tickValue) || cfg?.tickValue;
-  if ([entry, exit, ts, tv].some(v => isNaN(v!) || v === 0)) return null;
-  const diff = trade.direction === 'Short' ? entry - exit : exit - entry;
-  return (diff / ts!) * tv! * qty;
 }
 
 function formatDateShort(dateStr: string) {
@@ -1270,11 +1331,8 @@ function formatDateShort(dateStr: string) {
 }
 
 function renderPlaybookCard(trade: PlaybookTrade) {
-  const sc = STATUS_COLORS[trade.status] || STATUS_COLORS.Watching;
   const gc = GRADE_COLORS[trade.grade] || 'var(--muted)';
   const dirCls = trade.direction === 'Long' ? 'dir-long' : trade.direction === 'Short' ? 'dir-short' : '';
-  const pnl = trade.status === 'Closed' ? calculateTradePnl(trade) : null;
-  const pnlStr = pnl !== null ? `<span class="${pnl >= 0 ? 'pos-pnl-pos' : 'pos-pnl-neg'}">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} ${trade.currency || TICK_CONFIGS[trade.commodity]?.currency || ''}</span>` : '';
 
   const notesHtml = (trade.notes || []).map(n => {
     const d = new Date(n.ts);
@@ -1282,10 +1340,9 @@ function renderPlaybookCard(trade: PlaybookTrade) {
     return `<div class="pb-note"><span class="pb-note-ts">${ts}</span><span>${esc(n.text)}</span></div>`;
   }).join('');
 
-  return `<div class="pb-card" style="border-left:3px solid ${sc.border}">
+  return `<div class="pb-card" style="border-left:3px solid var(--border)">
     <div class="pb-card-top" data-toggle-card="${trade.id}" style="cursor:pointer">
       <div class="pb-card-left">
-        <span class="pb-status" style="color:${sc.text}">${esc(trade.status)}</span>
         ${trade.grade ? `<span class="pb-grade" style="color:${gc}">${esc(trade.grade)}</span>` : ''}
         <span class="pb-commodity">${esc(trade.commodity)}</span>
         <span class="pb-strategy">${esc(trade.strategyType)}</span>
@@ -1301,7 +1358,6 @@ function renderPlaybookCard(trade: PlaybookTrade) {
     <div class="pb-card-dates">
       ${trade.entryDate ? `<span>Entry: ${formatDateShort(trade.entryDate)}</span>` : ''}
       ${trade.plannedExitDate ? `<span>Exit: ${formatDateShort(trade.plannedExitDate)}</span>` : ''}
-      ${pnlStr ? `<span>P&L: ${pnlStr}</span>` : ''}
     </div>
     <div id="trade-detail-${trade.id}" style="display:none">
       ${notesHtml ? `<div class="pb-notes-section"><div class="section-label">Notes</div>${notesHtml}</div>` : ''}
@@ -1313,14 +1369,104 @@ function renderPlaybookCard(trade: PlaybookTrade) {
   </div>`;
 }
 
+const MONTH_LABELS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const MONTH_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+function renderArchiveView(archive: ArchivedTrade[], filter: { commodity: string; month: string }) {
+  // Filter
+  let filtered = [...archive];
+  if (filter.commodity) filtered = filtered.filter(a => a.commodity === filter.commodity);
+  if (filter.month) filtered = filtered.filter(a => {
+    const m = a.seasonalDate?.split('/')[1]; // DD/MM → MM
+    return m === filter.month;
+  });
+
+  // Sort by seasonal DD/MM
+  filtered.sort((a, b) => {
+    const [dA, mA] = (a.seasonalDate || '01/01').split('/').map(Number);
+    const [dB, mB] = (b.seasonalDate || '01/01').split('/').map(Number);
+    return (mA - mB) || (dA - dB);
+  });
+
+  // Group by month
+  const groups: Record<string, ArchivedTrade[]> = {};
+  for (const t of filtered) {
+    const mm = t.seasonalDate?.split('/')[1] || '00';
+    const monthIdx = parseInt(mm, 10) - 1;
+    const label = MONTH_LABELS[monthIdx] || 'Unknown';
+    if (!groups[label]) groups[label] = [];
+    groups[label].push(t);
+  }
+
+  const commodityOpts = ['<option value="">All</option>', ...VALID_PRODUCTS.map(p => `<option value="${p}"${filter.commodity === p ? ' selected' : ''}>${p}</option>`)].join('');
+  const monthOpts = ['<option value="">All Months</option>', ...MONTH_SHORT.map((m, i) => {
+    const val = String(i + 1).padStart(2, '0');
+    return `<option value="${val}"${filter.month === val ? ' selected' : ''}>${m}</option>`;
+  })].join('');
+
+  const filterBar = `<div class="pb-filter-bar">
+    <select class="pos-input" id="arch-f-commodity" style="width:100px">${commodityOpts}</select>
+    <select class="pos-input" id="arch-f-month" style="width:120px">${monthOpts}</select>
+    <span style="font-size:10px;color:var(--muted);margin-left:8px">${filtered.length} archived trade${filtered.length !== 1 ? 's' : ''}</span>
+  </div>`;
+
+  if (!filtered.length) {
+    return `${filterBar}<div class="full-row"><div class="empty-state"><div class="em-icon">◈</div><div>No archived trades</div><div class="em-cmd">Trades removed from the Playbook appear here</div></div></div>`;
+  }
+
+  let html = filterBar;
+  for (const [monthLabel, trades] of Object.entries(groups)) {
+    html += `<div class="archive-month-group">
+      <div class="archive-month-header">${monthLabel}</div>`;
+    for (const t of trades) {
+      const dirCls = (t.direction || '').toLowerCase() === 'long' ? 'dir-long' : (t.direction || '').toLowerCase() === 'short' ? 'dir-short' : '';
+      const gc = GRADE_COLORS[t.grade] || 'var(--muted)';
+      const notesHtml = (t.notes || []).map(n => {
+        const d = new Date(n.ts);
+        const ts = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) + ' ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        return `<div class="pb-note"><span class="pb-note-ts">${ts}</span><span>${esc(n.text)}</span></div>`;
+      }).join('');
+
+      html += `<div class="archive-card">
+        <div class="archive-card-top" data-toggle-archive="${t.id}" style="cursor:pointer">
+          <div class="pb-card-left">
+            <span class="archive-date">${esc(t.seasonalDate || '—')}</span>
+            ${t.grade ? `<span class="pb-grade" style="color:${gc}">${esc(t.grade)}</span>` : ''}
+            <span class="pb-commodity">${esc(t.commodity)}</span>
+            <span class="pb-strategy">${esc(t.strategyType)}</span>
+            <span class="${dirCls}" style="font-size:11px">${esc(t.direction)}</span>
+          </div>
+          <div class="pb-card-actions">
+            <button class="pos-close-btn" data-delete-archive="${t.id}" title="Delete permanently">✕</button>
+          </div>
+        </div>
+        <div class="pb-card-name">${esc(t.name)}</div>
+        ${t.summary ? `<div class="pb-card-summary">${esc(t.summary)}</div>` : ''}
+        <div id="archive-detail-${t.id}" style="display:none">
+          <div class="pb-card-dates" style="margin-top:4px">
+            ${t.entryDate ? `<span>Entry: ${formatDateShort(t.entryDate)}</span>` : ''}
+            ${t.plannedExitDate ? `<span>Exit: ${formatDateShort(t.plannedExitDate)}</span>` : ''}
+          </div>
+          ${notesHtml ? `<div class="pb-notes-section"><div class="section-label">Notes</div>${notesHtml}</div>` : ''}
+          <div class="pb-add-note">
+            <input class="pos-input" id="arch-note-input-${t.id}" placeholder="Add seasonal note..." style="flex:1" />
+            <button class="pos-add-btn" data-add-archive-note="${t.id}" style="flex-shrink:0">Add</button>
+          </div>
+        </div>
+      </div>`;
+    }
+    html += `</div>`;
+  }
+  return html;
+}
+
 function renderCalendarView(trades: PlaybookTrade[], month: number, year: number) {
-  const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
   const firstDay = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const today = new Date();
   const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
-  const activeTrades = trades.filter(t => t.status !== 'Closed');
+  const activeTrades = trades;
 
   let cells = '';
   // Empty cells for days before month starts
@@ -1334,10 +1480,6 @@ function renderCalendarView(trades: PlaybookTrade[], month: number, year: number
     for (const t of activeTrades) {
       if (t.entryDate === dateStr) dayTrades.push(`<div class="cal-trade cal-entry">${esc(t.commodity)} ${esc(t.name)}</div>`);
       if (t.plannedExitDate === dateStr) dayTrades.push(`<div class="cal-trade cal-exit">${esc(t.commodity)} ${esc(t.name)}</div>`);
-      // Show as active range
-      if (t.entryDate && t.plannedExitDate && t.entryDate <= dateStr && t.plannedExitDate >= dateStr && t.entryDate !== dateStr && t.plannedExitDate !== dateStr) {
-        dayTrades.push(`<div class="cal-trade cal-active">${esc(t.commodity)}</div>`);
-      }
     }
 
     cells += `<div class="cal-cell${isToday ? ' cal-today' : ''}"><div class="cal-day">${d}</div>${dayTrades.join('')}</div>`;
@@ -1346,7 +1488,7 @@ function renderCalendarView(trades: PlaybookTrade[], month: number, year: number
   return `
     <div class="cal-nav">
       <button class="pos-add-btn" id="cal-prev">◀</button>
-      <span class="cal-title">${MONTH_NAMES[month]} ${year}</span>
+      <span class="cal-title">${MONTH_LABELS[month]} ${year}</span>
       <button class="pos-add-btn" id="cal-next">▶</button>
     </div>
     <div class="cal-header">
@@ -1356,7 +1498,6 @@ function renderCalendarView(trades: PlaybookTrade[], month: number, year: number
     <div class="cal-legend">
       <span class="cal-leg"><span class="cal-dot cal-dot-entry"></span>Entry</span>
       <span class="cal-leg"><span class="cal-dot cal-dot-exit"></span>Exit</span>
-      <span class="cal-leg"><span class="cal-dot cal-dot-active"></span>Active range</span>
     </div>`;
 }
 
@@ -1554,6 +1695,12 @@ body { background: var(--bg); color: var(--text); font-family: var(--sans); font
 .pb-note-ts { color: var(--muted); font-family: var(--mono); font-size: 10px; flex-shrink: 0; }
 .pb-add-note { display: flex; gap: 6px; margin-top: 8px; }
 .pb-upcoming-row { display: flex; align-items: center; justify-content: space-between; padding: 7px 10px; margin-bottom: 4px; border-radius: 3px; background: var(--bg3); }
+/* Archive view */
+.archive-month-group { margin-bottom: 16px; }
+.archive-month-header { font-family: var(--mono); font-size: 11px; color: var(--accent); text-transform: uppercase; letter-spacing: 0.08em; padding: 6px 0 6px 2px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+.archive-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 5px; padding: 10px 12px; margin-bottom: 6px; }
+.archive-card-top { display: flex; align-items: center; justify-content: space-between; }
+.archive-date { font-family: var(--mono); font-size: 11px; color: var(--green); background: rgba(34,197,94,0.08); padding: 1px 6px; border-radius: 2px; font-weight: 500; }
 /* Trade form */
 .trade-modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.75); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 16px; }
 .tf-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }

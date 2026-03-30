@@ -3,12 +3,14 @@ import { redis } from '@/app/lib/redis';
 import { checkAuth } from '@/app/lib/auth';
 
 const KV_KEY = 'playbook:trades';
+const ARCHIVE_KEY = 'playbook:archive';
 
 export async function GET(req: any) {
   const authErr = checkAuth(req);
   if (authErr) return authErr;
   const trades = await redis.get(KV_KEY) || [];
-  return NextResponse.json({ trades });
+  const archive = await redis.get(ARCHIVE_KEY) || [];
+  return NextResponse.json({ trades, archive });
 }
 
 export async function POST(req: any) {
@@ -39,7 +41,33 @@ export async function POST(req: any) {
   }
 
   if (action === 'delete') {
+    // Archive the trade instead of hard-deleting
     const { id } = body;
+    const trade = trades.find((t: any) => t.id === id);
+    if (trade) {
+      const archive: any[] = (await redis.get(ARCHIVE_KEY) as any[]) || [];
+      // Build DD/MM seasonal date from entryDate (YYYY-MM-DD → DD/MM)
+      let seasonalDate = '';
+      if (trade.entryDate) {
+        const parts = trade.entryDate.split('-');
+        if (parts.length === 3) seasonalDate = `${parts[2]}/${parts[1]}`;
+      }
+      archive.push({
+        id: trade.id,
+        name: trade.name,
+        commodity: trade.commodity,
+        strategyType: trade.strategyType || '',
+        direction: trade.direction || '',
+        grade: trade.grade || '',
+        summary: trade.summary || '',
+        entryDate: trade.entryDate || '',
+        plannedExitDate: trade.plannedExitDate || '',
+        seasonalDate,
+        notes: trade.notes || [],
+        archivedAt: new Date().toISOString(),
+      });
+      await redis.set(ARCHIVE_KEY, archive);
+    }
     const filtered = trades.filter((t: any) => t.id !== id);
     await redis.set(KV_KEY, filtered);
     return NextResponse.json({ ok: true });
@@ -53,6 +81,26 @@ export async function POST(req: any) {
     trades[idx].notes.push({ text, ts: new Date().toISOString() });
     trades[idx].updatedAt = new Date().toISOString();
     await redis.set(KV_KEY, trades);
+    return NextResponse.json({ ok: true });
+  }
+
+  // Archive note management
+  if (action === 'addArchiveNote') {
+    const { id, text } = body;
+    const archive: any[] = (await redis.get(ARCHIVE_KEY) as any[]) || [];
+    const idx = archive.findIndex((t: any) => t.id === id);
+    if (idx === -1) return NextResponse.json({ error: 'Archived trade not found' }, { status: 404 });
+    if (!archive[idx].notes) archive[idx].notes = [];
+    archive[idx].notes.push({ text, ts: new Date().toISOString() });
+    await redis.set(ARCHIVE_KEY, archive);
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === 'deleteArchive') {
+    const { id } = body;
+    const archive: any[] = (await redis.get(ARCHIVE_KEY) as any[]) || [];
+    const filtered = archive.filter((t: any) => t.id !== id);
+    await redis.set(ARCHIVE_KEY, filtered);
     return NextResponse.json({ ok: true });
   }
 
