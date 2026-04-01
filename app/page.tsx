@@ -1129,42 +1129,46 @@ function renderUpcomingTrades(playbook: PlaybookTrade[], product: string) {
 }
 
 function renderDynamicRangeBar(entry: FlyAnalyticsEntry) {
+  if (!entry?.percentiles || typeof entry.percentiles !== 'object') return '';
+  const live = Number(entry.live);
+  if (isNaN(live)) return '';
   const keys = Object.keys(entry.percentiles).sort((a, b) => {
     const na = parseFloat(a.replace(/[^0-9.]/g, ''));
     const nb = parseFloat(b.replace(/[^0-9.]/g, ''));
     return na - nb;
   });
   if (keys.length < 2) return '';
-  const vals = keys.map((k) => entry.percentiles[k]);
+  const vals = keys.map((k) => Number(entry.percentiles[k])).filter((v) => !isNaN(v));
+  if (vals.length < 2) return '';
   const lo = vals[0];
   const hi = vals[vals.length - 1];
   const range = hi - lo;
   if (range <= 0) return '';
   const clamp = (v: number) => Math.max(0, Math.min(100, ((v - lo) / range) * 100));
-  const livePos = clamp(entry.live);
-  const livePct = ((entry.live - lo) / range) * 100;
+  const livePos = clamp(live);
+  const livePct = ((live - lo) / range) * 100;
   let zoneLabel = '';
   let zoneCls = '';
   if (livePct <= 10) { zoneLabel = 'CHEAP'; zoneCls = 'rb-zone-cheap'; }
   else if (livePct >= 90) { zoneLabel = 'RICH'; zoneCls = 'rb-zone-rich'; }
 
   // Build tooltip from all keys
-  const ttParts = keys.map((k) => `${k}: ${entry.percentiles[k].toFixed(2)}`).join(' | ');
-  const ttData = `data-tt-custom="${esc(ttParts)}" data-tt-live="${entry.live.toFixed(2)}"`;
+  const ttParts = keys.map((k, i) => `${k}: ${vals[i].toFixed(2)}`).join(' | ');
+  const ttData = `data-tt-custom="${esc(ttParts)}" data-tt-live="${live.toFixed(2)}"`;
 
   // Find middle-ish keys for inner band (roughly P25-P75 equivalent)
-  const midStart = Math.floor(keys.length * 0.25);
-  const midEnd = Math.ceil(keys.length * 0.75) - 1;
+  const midStart = Math.floor(vals.length * 0.25);
+  const midEnd = Math.ceil(vals.length * 0.75) - 1;
   const innerLeft = clamp(vals[midStart]);
   const innerRight = clamp(vals[midEnd]);
 
   // Find median key
-  const medIdx = Math.floor(keys.length / 2);
+  const medIdx = Math.floor(vals.length / 2);
   const medPos = clamp(vals[medIdx]);
 
   // Ticks for all percentile keys
-  const ticks = keys.map((_, i) => {
-    const pos = clamp(vals[i]);
+  const ticks = vals.map((v, i) => {
+    const pos = clamp(v);
     const isMid = i === medIdx;
     return `<div class="rb-tick${isMid ? ' rb-tick-mid' : ''}" style="left:${pos}%"></div>`;
   }).join('');
@@ -1183,18 +1187,21 @@ function renderDynamicRangeBar(entry: FlyAnalyticsEntry) {
 }
 
 function renderFlyAnalyticsEntry(entry: FlyAnalyticsEntry) {
+  if (!entry?.label) return '';
+  const live = Number(entry.live);
   return `<div class="rb-row">
     <span class="rb-name">${esc(entry.label)}</span>
-    <span class="rb-price">${entry.live.toFixed(2)}</span>
+    <span class="rb-price">${isNaN(live) ? '—' : live.toFixed(2)}</span>
     ${renderDynamicRangeBar(entry)}
   </div>`;
 }
 
 function renderFlyAnalytics(analytics: FcpoFlyAnalytics) {
-  const ffRows = analytics.flyFlySpreads?.length
+  if (!analytics) return '';
+  const ffRows = Array.isArray(analytics.flyFlySpreads) && analytics.flyFlySpreads.length
     ? analytics.flyFlySpreads.map((e) => renderFlyAnalyticsEntry(e)).join('')
     : '<div class="empty-state" style="padding:12px 0"><div class="em-icon">◈</div><div>No fly/fly data</div></div>';
-  const dfRows = analytics.deferredFlys?.length
+  const dfRows = Array.isArray(analytics.deferredFlys) && analytics.deferredFlys.length
     ? analytics.deferredFlys.map((e) => renderFlyAnalyticsEntry(e)).join('')
     : '<div class="empty-state" style="padding:12px 0"><div class="em-icon">◈</div><div>No deferred fly data</div></div>';
 
