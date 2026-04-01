@@ -1196,13 +1196,47 @@ function renderFlyAnalyticsEntry(entry: FlyAnalyticsEntry) {
   </div>`;
 }
 
-function renderFlyAnalytics(analytics: FcpoFlyAnalytics) {
+function buildFlyMap(butterflies: SpreadEntry[]): Record<string, number> {
+  const map: Record<string, number> = {};
+  for (const b of butterflies) {
+    if (b.value === null || b.value === undefined) continue;
+    // name like "Apr/May/Jun26" — first segment before "/" gives the front month
+    const firstMonth = b.name.split('/')[0].replace(/\d/g, '').trim();
+    if (firstMonth) map[firstMonth] = b.value;
+  }
+  return map;
+}
+
+function renderFlyAnalytics(analytics: FcpoFlyAnalytics, butterflies: SpreadEntry[] = []) {
   if (!analytics) return '';
+  const flyMap = buildFlyMap(butterflies);
+
+  // Compute live for a flyFlySpreads entry: "JanFly - FebFly" → flyMap["Jan"] - flyMap["Feb"]
+  const withFlyFlyLive = (e: FlyAnalyticsEntry): FlyAnalyticsEntry => {
+    const parts = e.label.split(/\s*-\s*/);
+    if (parts.length === 2) {
+      const m1 = parts[0].replace(/fly$/i, '').trim();
+      const m2 = parts[1].replace(/fly$/i, '').trim();
+      const v1 = flyMap[m1];
+      const v2 = flyMap[m2];
+      if (v1 !== undefined && v2 !== undefined) return { ...e, live: v1 - v2 };
+    }
+    return e;
+  };
+
+  // Compute live for a deferredFlys entry: "Oct Fly" → flyMap["Oct"]
+  const withDeferredLive = (e: FlyAnalyticsEntry): FlyAnalyticsEntry => {
+    const month = e.label.replace(/\s*fly$/i, '').trim();
+    const v = flyMap[month];
+    if (v !== undefined) return { ...e, live: v };
+    return e;
+  };
+
   const ffRows = Array.isArray(analytics.flyFlySpreads) && analytics.flyFlySpreads.length
-    ? analytics.flyFlySpreads.map((e) => renderFlyAnalyticsEntry(e)).join('')
+    ? analytics.flyFlySpreads.map((e) => renderFlyAnalyticsEntry(withFlyFlyLive(e))).join('')
     : '<div class="empty-state" style="padding:12px 0"><div class="em-icon">◈</div><div>No fly/fly data</div></div>';
   const dfRows = Array.isArray(analytics.deferredFlys) && analytics.deferredFlys.length
-    ? analytics.deferredFlys.map((e) => renderFlyAnalyticsEntry(e)).join('')
+    ? analytics.deferredFlys.map((e) => renderFlyAnalyticsEntry(withDeferredLive(e))).join('')
     : '<div class="empty-state" style="padding:12px 0"><div class="em-icon">◈</div><div>No deferred fly data</div></div>';
 
   return `<div class="rb-cols">
@@ -1239,7 +1273,7 @@ function renderProduct(data: DashboardData, product: string, spreads: Record<str
     </div>
     <div class="full-row card"><div class="card-header"><span class="card-title">BEST OPPORTUNITIES</span></div><div class="card-body">${renderIdeasCard(prod)}</div></div>
     ${spreadsCard}
-    ${product === 'FCPO' && prod.fcpoFlyAnalytics ? `<div class="full-row card"><div class="card-header"><span class="card-title">FLY ANALYTICS</span></div><div class="card-body">${renderFlyAnalytics(prod.fcpoFlyAnalytics)}</div></div>` : ''}
+    ${product === 'FCPO' && prod.fcpoFlyAnalytics ? `<div class="full-row card"><div class="card-header"><span class="card-title">FLY ANALYTICS</span></div><div class="card-body">${renderFlyAnalytics(prod.fcpoFlyAnalytics, sp?.butterflies ?? [])}</div></div>` : ''}
     <div class="grid-3">
       <div class="card"><div class="card-header"><span class="card-title">KEY UPCOMING DATES</span></div><div class="card-body">${renderDatesCard(prod)}</div></div>
       <div class="card"><div class="card-header"><span class="card-title">KEY RISKS</span></div><div class="card-body">${renderRisksCard(prod)}</div></div>
