@@ -41,7 +41,7 @@ export default function Dashboard() {
     modal: false,
     tradeModal: false,
     editingTrade: null,
-    overviewSub: 'playbook',
+    overviewSub: 'calendar',
     calMonth: new Date().getMonth(),
     calYear: new Date().getFullYear(),
     pbFilter: { commodity: '', search: '' },
@@ -106,6 +106,17 @@ export default function Dashboard() {
           qty: (document.getElementById('pos-qty') as HTMLInputElement)?.value || '',
           entry: (document.getElementById('pos-entry') as HTMLInputElement)?.value || '',
         };
+      }
+    }
+
+    // Preserve open trade modal form values so auto-refresh doesn't wipe them
+    let openTradeForm: Record<string, string> | null = null;
+    if (stateRef.current.tradeModal) {
+      const fields = ['tf-name', 'tf-commodity', 'tf-strategy', 'tf-direction', 'tf-grade', 'tf-entryDate', 'tf-exitDate', 'tf-summary'];
+      openTradeForm = {};
+      for (const id of fields) {
+        const el = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null;
+        if (el) openTradeForm[id] = el.value;
       }
     }
 
@@ -349,6 +360,14 @@ export default function Dashboard() {
     });
     document.getElementById('tf-commodity')?.addEventListener('change', updateTickDefaults);
     document.getElementById('tf-submit')?.addEventListener('click', () => submitTrade(render));
+
+    // Restore trade form values if modal was open during re-render
+    if (openTradeForm) {
+      for (const [id, val] of Object.entries(openTradeForm)) {
+        const el = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null;
+        if (el && val) el.value = val;
+      }
+    }
 
     // Add note buttons
     appRef.current.querySelectorAll('[data-add-note]').forEach((el) => {
