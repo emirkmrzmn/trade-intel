@@ -619,6 +619,8 @@ interface DateEntry { date: string; label: string; note: string; urgency: string
 interface Position { instrument: string; direction: string; qty: string; entry: string; pnl: string }
 interface SpreadPctEntry { min: number; p5: number; p10: number; p25: number; p50: number; p75: number; p90: number; p95: number; max: number }
 interface SpreadPercentiles { calendars: Record<string, SpreadPctEntry>; butterflies: Record<string, SpreadPctEntry> }
+interface FlyAnalyticsEntry { label: string; live: number; percentiles: Record<string, number> }
+interface FcpoFlyAnalytics { flyFlySpreads: FlyAnalyticsEntry[]; deferredFlys: FlyAnalyticsEntry[] }
 interface ProductData {
   regime: string | null;
   regimeType: string;
@@ -629,6 +631,7 @@ interface ProductData {
   positions: Position[];
   risks: string[];
   spreadPercentiles: SpreadPercentiles | null;
+  fcpoFlyAnalytics?: FcpoFlyAnalytics | null;
   lastUpdated: string | null;
 }
 interface DashboardData {
@@ -1125,6 +1128,90 @@ function renderUpcomingTrades(playbook: PlaybookTrade[], product: string) {
   }).join('');
 }
 
+function renderDynamicRangeBar(entry: FlyAnalyticsEntry) {
+  const keys = Object.keys(entry.percentiles).sort((a, b) => {
+    const na = parseFloat(a.replace(/[^0-9.]/g, ''));
+    const nb = parseFloat(b.replace(/[^0-9.]/g, ''));
+    return na - nb;
+  });
+  if (keys.length < 2) return '';
+  const vals = keys.map((k) => entry.percentiles[k]);
+  const lo = vals[0];
+  const hi = vals[vals.length - 1];
+  const range = hi - lo;
+  if (range <= 0) return '';
+  const clamp = (v: number) => Math.max(0, Math.min(100, ((v - lo) / range) * 100));
+  const livePos = clamp(entry.live);
+  const livePct = ((entry.live - lo) / range) * 100;
+  let zoneLabel = '';
+  let zoneCls = '';
+  if (livePct <= 10) { zoneLabel = 'CHEAP'; zoneCls = 'rb-zone-cheap'; }
+  else if (livePct >= 90) { zoneLabel = 'RICH'; zoneCls = 'rb-zone-rich'; }
+
+  // Build tooltip from all keys
+  const ttParts = keys.map((k) => `${k}: ${entry.percentiles[k].toFixed(2)}`).join(' | ');
+  const ttData = `data-tt-custom="${esc(ttParts)}" data-tt-live="${entry.live.toFixed(2)}"`;
+
+  // Find middle-ish keys for inner band (roughly P25-P75 equivalent)
+  const midStart = Math.floor(keys.length * 0.25);
+  const midEnd = Math.ceil(keys.length * 0.75) - 1;
+  const innerLeft = clamp(vals[midStart]);
+  const innerRight = clamp(vals[midEnd]);
+
+  // Find median key
+  const medIdx = Math.floor(keys.length / 2);
+  const medPos = clamp(vals[medIdx]);
+
+  // Ticks for all percentile keys
+  const ticks = keys.map((_, i) => {
+    const pos = clamp(vals[i]);
+    const isMid = i === medIdx;
+    return `<div class="rb-tick${isMid ? ' rb-tick-mid' : ''}" style="left:${pos}%"></div>`;
+  }).join('');
+
+  return `<div class="rb-wrap" ${ttData}>
+    <span class="rb-end">${lo.toFixed(1)}</span>
+    <div class="rb-track">
+      <div class="rb-inner" style="left:${innerLeft}%;width:${innerRight - innerLeft}%"></div>
+      ${ticks}
+      <div class="rb-tick rb-tick-mid" style="left:${medPos}%"></div>
+      <div class="rb-dot" style="left:${livePos}%"><div class="rb-dot-glow"></div><div class="rb-dot-core"></div></div>
+    </div>
+    <span class="rb-end">${hi.toFixed(1)}</span>
+    ${zoneLabel ? `<span class="rb-zone ${zoneCls}">${zoneLabel}</span>` : ''}
+  </div>`;
+}
+
+function renderFlyAnalyticsEntry(entry: FlyAnalyticsEntry) {
+  return `<div class="rb-row">
+    <span class="rb-name">${esc(entry.label)}</span>
+    <span class="rb-price">${entry.live.toFixed(2)}</span>
+    ${renderDynamicRangeBar(entry)}
+  </div>`;
+}
+
+function renderFlyAnalytics(analytics: FcpoFlyAnalytics) {
+  const ffRows = analytics.flyFlySpreads?.length
+    ? analytics.flyFlySpreads.map((e) => renderFlyAnalyticsEntry(e)).join('')
+    : '<div class="empty-state" style="padding:12px 0"><div class="em-icon">◈</div><div>No fly/fly data</div></div>';
+  const dfRows = analytics.deferredFlys?.length
+    ? analytics.deferredFlys.map((e) => renderFlyAnalyticsEntry(e)).join('')
+    : '<div class="empty-state" style="padding:12px 0"><div class="em-icon">◈</div><div>No deferred fly data</div></div>';
+
+  return `<div class="rb-cols">
+    <div class="rb-col">
+      <div class="section-label">Fly / Fly Spreads</div>
+      <div class="rb-hdr"><span class="rb-hdr-name">Spread</span><span class="rb-hdr-price">Live</span><span class="rb-hdr-bar">Low</span><span class="rb-hdr-end">High</span></div>
+      ${ffRows}
+    </div>
+    <div class="rb-col">
+      <div class="section-label">Deferred Flys (5mo+)</div>
+      <div class="rb-hdr"><span class="rb-hdr-name">Fly</span><span class="rb-hdr-price">Live</span><span class="rb-hdr-bar">Low</span><span class="rb-hdr-end">High</span></div>
+      ${dfRows}
+    </div>
+  </div>`;
+}
+
 function renderProduct(data: DashboardData, product: string, spreads: Record<string, SpreadsProduct> | null, spreadsLoading: boolean, playbook?: PlaybookTrade[]) {
   const prod = data.products[product] || buildDefault().products[VALID_PRODUCTS[0]];
   const sp = spreads?.[product] ?? null;
@@ -1145,6 +1232,7 @@ function renderProduct(data: DashboardData, product: string, spreads: Record<str
     </div>
     <div class="full-row card"><div class="card-header"><span class="card-title">BEST OPPORTUNITIES</span></div><div class="card-body">${renderIdeasCard(prod)}</div></div>
     ${spreadsCard}
+    ${product === 'FCPO' && prod.fcpoFlyAnalytics ? `<div class="full-row card"><div class="card-header"><span class="card-title">FLY ANALYTICS</span></div><div class="card-body">${renderFlyAnalytics(prod.fcpoFlyAnalytics)}</div></div>` : ''}
     <div class="grid-3">
       <div class="card"><div class="card-header"><span class="card-title">KEY UPCOMING DATES</span></div><div class="card-body">${renderDatesCard(prod)}</div></div>
       <div class="card"><div class="card-header"><span class="card-title">KEY RISKS</span></div><div class="card-body">${renderRisksCard(prod)}</div></div>
