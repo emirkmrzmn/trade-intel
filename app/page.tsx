@@ -677,7 +677,7 @@ const TICK_CONFIGS: Record<string, { tickSize: number; tickValue: number; curren
   HE: { tickSize: 0.025, tickValue: 10, currency: 'USD' },
 };
 
-const STRATEGY_TYPES = ['Butterfly', 'Calendar', 'Spread', 'Outright', 'Other'];
+const STRATEGY_TYPES = ['Calendar', 'Butterfly', 'Spread', 'Outright', 'Other'];
 const GRADE_OPTIONS = ['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'C-'];
 const GRADE_COLORS: Record<string, string> = {
   'A+': '#059669', A: '#059669', 'A-': '#10b981',
